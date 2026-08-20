@@ -24,6 +24,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "lib/tesseract/tesseract.min.js",
         "content/image-extractor.js",
         "content/ocr.js",
         "content/translator.js",
