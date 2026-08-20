@@ -21,7 +21,8 @@ rikai/
 │   ├── popup.js               # Popup logic (sends commands to content script)
 │   └── popup.css              # Popup styles
 ├── content/
-│   └── content.js             # Content script (runs on web pages)
+│   ├── content.js             # Content script (message handler, orchestrator)
+│   └── image-extractor.js     # Finds manga/webtoon images on the page
 ├── icons/
 │   ├── icon16.png             # Extension icon (16x16)
 │   ├── icon48.png             # Extension icon (48x48)
@@ -72,22 +73,28 @@ Popup (popup.js)          Content Script (content.js)
 - ✅ Shows popup with "Translate Page" button
 - ✅ Communicates button click to content script
 - ✅ Content script receives and acknowledges the command
-- ✅ Content script counts `<img>` elements on the page
+- ✅ **Image extraction** — scans for `<img>`, `<picture>`, `<canvas>`, and CSS background images
+- ✅ **Lazy-loading support** — resolves `data-src`, `loading="lazy"`, and 10+ lazy-load attributes
+- ✅ **Dynamic content** — MutationObserver detects images added after page load
+- ✅ **Infinite scroll** — IntersectionObserver + scroll handler catches images as they load
+- ✅ **Smart filtering** — skips icons, ads, avatars, favicons, SVGs, and tiny images
+- ✅ **Re-scan** — can re-scan the page without restarting observation
 
-## Architecture (Planned)
+## Architecture
 
-Future modules will be organized by concern:
+Modules are organized by concern. Each is an independent, replaceable unit:
 
-| Concern             | Future Location              |
-|---------------------|------------------------------|
-| Reader detection    | `content/reader-detector.js` |
-| Image extraction    | `content/image-extractor.js` |
-| OCR                 | `content/ocr.js`             |
-| Language detection  | `content/language.js`        |
-| Translation         | `content/translator.js`      |
-| Text masking        | `content/masker.js`          |
-| Overlay rendering   | `content/overlay.js`         |
-| Translation state   | `content/state.js`           |
+| Concern             | Location                     | Status        |
+|---------------------|------------------------------|---------------|
+| Message handling    | `content/content.js`         | ✅ Done       |
+| Image extraction    | `content/image-extractor.js` | ✅ Done       |
+| Reader detection    | `content/reader-detector.js` | 🔲 Planned   |
+| OCR                 | `content/ocr.js`             | 🔲 Planned   |
+| Language detection  | `content/language.js`        | 🔲 Planned   |
+| Translation         | `content/translator.js`      | 🔲 Planned   |
+| Text masking        | `content/masker.js`          | 🔲 Planned   |
+| Overlay rendering   | `content/overlay.js`         | 🔲 Planned   |
+| Translation state   | `content/state.js`           | 🔲 Planned   |
 
 ## Technology Choices
 
@@ -99,12 +106,11 @@ Future modules will be organized by concern:
 
 ## What's Next
 
-1. **Image extraction** — find and extract manga/webtoon images from the page
-2. **OCR integration** — detect text regions in images (Tesseract.js or similar)
-3. **Translation API** — translate detected Japanese/Korean to English
-4. **Text masking** — cover original text in the image
-5. **Overlay rendering** — position English text over the masked regions
-6. **Toggle mechanism** — show/hide translations without re-processing
+1. **OCR integration** — detect text regions in images (Tesseract.js or similar)
+2. **Translation API** — translate detected Japanese/Korean to English
+3. **Text masking** — cover original text in the image
+4. **Overlay rendering** — position English text over the masked regions
+5. **Toggle mechanism** — show/hide translations without re-processing
 
 ## License
 
