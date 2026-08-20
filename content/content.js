@@ -1,5 +1,5 @@
 // Rikai content script
-// Receives messages from the popup and orchestrates extraction, OCR, and translation.
+// Receives messages from the popup and orchestrates extraction, OCR, translation, and overlay.
 
 (() => {
   "use strict";
@@ -28,6 +28,9 @@
 
   /** @type {import('./translator').Translator} */
   const translator = new window.RikaiTranslator();
+
+  /** @type {import('./overlay').Overlay} */
+  const overlay = new window.RikaiOverlay();
 
   // ─── Message Listener ───────────────────────────────────────────────
 
@@ -74,7 +77,7 @@
 
   /**
    * Handle the "translatePage" command.
-   * Full pipeline: scan images → OCR → translate.
+   * Full pipeline: scan images → OCR → translate → render overlay.
    */
   async function handleTranslatePage(message, sendResponse) {
     console.log("[Rikai] Received 'translatePage' command.");
@@ -131,16 +134,26 @@
         console.log(
           `[Rikai] Translation complete: ${successfulTranslations.length}/${state.translations.length} successful.`
         );
+
+        // Step 4: Render overlays
+        if (successfulTranslations.length > 0) {
+          console.log("[Rikai] Rendering translation overlays...");
+          overlay.render(
+            state.translations,
+            state.extractedImages,
+            state.ocrResults
+          );
+          state.translationActive = true;
+        }
       } else {
         state.translations = [];
         console.log("[Rikai] No text regions to translate.");
       }
 
-      state.translationActive = true;
-
       // Build summary
       const ocrTime = state.ocrResults.reduce((sum, r) => sum + r.processingTime, 0);
-      const summary = `${imgCount} images, ${totalRegions} text regions, ${state.translations.length} translations (${(ocrTime / 1000).toFixed(1)}s OCR)`;
+      const overlayCount = overlay.isVisible() ? state.translations.filter((t) => t.translation.success).length : 0;
+      const summary = `${imgCount} images, ${totalRegions} text regions, ${state.translations.length} translations, ${overlayCount} overlays`;
 
       sendResponse({
         success: true,
@@ -178,20 +191,18 @@
 
   /**
    * Handle "toggleTranslation" — show/hide translation overlay.
-   * Placeholder for future overlay toggle.
+   * Does NOT re-run OCR or translation — just toggles visibility.
    */
   function handleToggleTranslation(sendResponse) {
-    state.translationActive = !state.translationActive;
-    console.log(`[Rikai] Translation toggled: ${state.translationActive ? "ON" : "OFF"}`);
+    const isVisible = overlay.toggle();
+    state.translationActive = isVisible;
 
-    // Future: toggle visibility of translation overlay elements
-    // The translations are already cached in state.translations
-    // No need to re-run OCR or translation
+    console.log(`[Rikai] Translation toggled: ${isVisible ? "ON" : "OFF"}`);
 
     sendResponse({
       success: true,
-      message: `Translation ${state.translationActive ? "enabled" : "disabled"}.`,
-      active: state.translationActive,
+      message: `Translation ${isVisible ? "enabled" : "disabled"}.`,
+      active: isVisible,
     });
   }
 
@@ -323,12 +334,10 @@
 
       let ocrResultsToTranslate;
       if (imageIds && imageIds.length > 0) {
-        // Translate specific images
         ocrResultsToTranslate = state.ocrResults.filter((r) =>
           imageIds.includes(r.imageId)
         );
       } else {
-        // Translate all OCR results
         ocrResultsToTranslate = state.ocrResults;
       }
 
@@ -354,6 +363,13 @@
         } else {
           state.translations.push(t);
         }
+      }
+
+      // Re-render overlays with updated translations
+      const successfulTranslations = state.translations.filter((t) => t.translation.success);
+      if (successfulTranslations.length > 0) {
+        overlay.render(state.translations, state.extractedImages, state.ocrResults);
+        state.translationActive = true;
       }
 
       sendResponse({
@@ -393,6 +409,14 @@
       })),
     });
   }
+
+  // ─── Cleanup ────────────────────────────────────────────────────────
+
+  // Clean up overlays when the page unloads
+  window.addEventListener("beforeunload", () => {
+    overlay.clear();
+    ocrEngine.terminate();
+  });
 
   console.log("[Rikai] Content script loaded.");
 })();

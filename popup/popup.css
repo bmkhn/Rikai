@@ -62,6 +62,26 @@ body {
   cursor: not-allowed;
 }
 
+.btn-secondary {
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #334155;
+}
+
+.btn-secondary:hover {
+  background: #1e293b;
+  border-color: #475569;
+}
+
+.btn-secondary:active {
+  opacity: 0.85;
+}
+
+.btn-secondary:disabled {
+  background: #333;
+  cursor: not-allowed;
+}
+
 .status {
   display: flex;
   align-items: center;
