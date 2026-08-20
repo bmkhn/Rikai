@@ -2,7 +2,8 @@
 // Communicates with the content script via chrome.tabs.sendMessage
 
 const translateBtn = document.getElementById("translate-btn");
-const toggleBtn = document.getElementById("toggle-btn");
+const toggleContainer = document.getElementById("toggle-container");
+const toggleCheckbox = document.getElementById("toggle-checkbox");
 const statusEl = document.getElementById("status");
 const statusIcon = document.getElementById("status-icon");
 const statusText = document.getElementById("status-text");
@@ -18,7 +19,7 @@ function setStatus(type, icon, text) {
 
 translateBtn.addEventListener("click", async () => {
   translateBtn.disabled = true;
-  toggleBtn.hidden = true;
+  toggleContainer.hidden = true;
   setStatus("loading", "⏳", "Sending command...");
 
   try {
@@ -30,14 +31,20 @@ translateBtn.addEventListener("click", async () => {
       return;
     }
 
+    // Get selected language
+    const langRadio = document.querySelector('input[name="lang"]:checked');
+    const lang = langRadio ? langRadio.value : "jpn";
+
     const response = await chrome.tabs.sendMessage(tab.id, {
       action: "translatePage",
+      lang,
     });
 
     if (response && response.success) {
       setStatus("success", "✅", response.message || "Translation started!");
-      // Show toggle button after successful translation
-      toggleBtn.hidden = false;
+      // Show toggle slider after successful translation
+      toggleContainer.hidden = false;
+      toggleCheckbox.checked = true;
     } else {
       setStatus("error", "❌", response?.message || "Translation failed.");
     }
@@ -52,17 +59,14 @@ translateBtn.addEventListener("click", async () => {
   }
 });
 
-// ─── Toggle Button ───────────────────────────────────────────────────
+// ─── Toggle Slider ──────────────────────────────────────────────────
 
-toggleBtn.addEventListener("click", async () => {
-  toggleBtn.disabled = true;
-
+toggleCheckbox.addEventListener("change", async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     if (!tab) {
       setStatus("error", "❌", "No active tab found.");
-      toggleBtn.disabled = false;
       return;
     }
 
@@ -77,7 +81,5 @@ toggleBtn.addEventListener("click", async () => {
     }
   } catch (err) {
     setStatus("error", "❌", `Error: ${err.message}`);
-  } finally {
-    toggleBtn.disabled = false;
   }
 });

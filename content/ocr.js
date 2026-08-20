@@ -1,75 +1,61 @@
 // Rikai OCR Module
 // Detects text regions in manga/webtoon images using Tesseract.js.
-// Designed to be replaceable — swap this module for a cloud OCR API later.
+// Uses canvas drawImage to bypass CORS for cross-origin images.
 
 /**
  * @typedef {Object} TextRegion
- * @property {string} text        - The detected text content
- * @property {number} confidence  - Confidence score (0-1)
+ * @property {string} text
+ * @property {number} confidence
  * @property {{ x: number, y: number, width: number, height: number }} bbox
- *                                - Bounding box relative to the image
- * @property {string} lang        - Detected language code ("jpn", "kor", "eng", etc.)
+ * @property {string} lang
  */
 
 /**
  * @typedef {Object} OcrResult
- * @property {string} imageId     - ID of the image that was processed
- * @property {TextRegion[]} regions - Detected text regions
- * @property {string} imageLang   - Overall detected language for the image
- * @property {number} processingTime - Time taken in milliseconds
+ * @property {string} imageId
+ * @property {TextRegion[]} regions
+ * @property {string} imageLang
+ * @property {number} processingTime
  */
 
 /**
- * Supported OCR languages (Tesseract language codes).
+ * Map from UI language selector to Tesseract language codes.
  */
-const SUPPORTED_LANGS = ["jpn", "jpn_vert", "kor"];
+const LANG_MAP = {
+  jpn: "jpn",
+  kor: "kor",
+  both: "jpn+kor",
+};
 
-/**
- * OCR engine configuration.
- */
 const OCR_CONFIG = {
-  // Languages to detect (Tesseract trained data)
-  langs: "jpn+kor",
-
-  // Tesseract.js options
-  tesseractOptions: {
-    // Use LSTM engine for better accuracy
-    legacy: false,
-    // Enable page segmentation
-    rectangle: undefined, // Process entire image
-  },
-
-  // Minimum confidence threshold to include a text region
-  minConfidence: 0.3,
-
-  // Maximum images to process concurrently
-  maxConcurrent: 2,
-
-  // Whether to use vertical Japanese text detection
-  useVerticalJapanese: true,
+  // Lower threshold — manga text is often stylized, so be more lenient
+  minConfidence: 0.15,
+  maxConcurrent: 1, // Process one at a time for stability
 };
 
 class OcrEngine {
   constructor() {
-    /** @type {Object|null} Tesseract.js worker */
     this._worker = null;
     this._initialized = false;
     this._initializing = false;
     this._initPromise = null;
+    /** @type {string} Currently loaded language(s) */
+    this._loadedLangs = null;
   }
 
-  /**
-   * Initialize the Tesseract.js worker.
-   * Must be called before processing images.
-   * @returns {Promise<void>}
-   */
-  async initialize() {
+  async initialize(lang = "jpn") {
+    const tesseractLang = LANG_MAP[lang] || lang;
+
+    // If worker exists but with different language, terminate and re-init
+    if (this._worker && this._loadedLangs !== tesseractLang) {
+      console.log(`[Rikai] OCR: Language changed from ${this._loadedLangs} to ${tesseractLang}, reinitializing...`);
+      await this.terminate();
+    }
+
     if (this._initialized) return;
     if (this._initializing) return this._initPromise;
-
     this._initializing = true;
-    this._initPromise = this._doInitialize();
-
+    this._initPromise = this._doInitialize(tesseractLang);
     try {
       await this._initPromise;
     } finally {
@@ -77,76 +63,76 @@ class OcrEngine {
     }
   }
 
-  async _doInitialize() {
-    console.log("[Rikai] OCR: Initializing Tesseract.js worker...");
+  async _doInitialize(langs) {
+    console.log(`[Rikai] OCR: Initializing worker with languages: ${langs}`);
 
-    // Check if Tesseract.js is available
     if (typeof Tesseract === "undefined") {
-      throw new Error(
-        "Tesseract.js not loaded. Run 'npm run setup-ocr' and ensure lib/tesseract/ is in the extension."
-      );
+      throw new Error("Tesseract.js not loaded.");
     }
 
-    try {
-      // Get the extension's base URL for web-accessible resources
-      const extensionUrl = chrome.runtime.getURL("lib/tesseract/");
-      console.log(`[Rikai] OCR: Extension URL: ${extensionUrl}`);
+    const extensionUrl = chrome.runtime.getURL("lib/tesseract/");
 
-      // Create a worker with language configuration
-      // For Chrome extensions, we need to specify the worker path via web-accessible resources.
-      // Do NOT set corePath — Tesseract.js downloads the WASM core from its default CDN.
-      this._worker = await Tesseract.createWorker(OCR_CONFIG.langs, 1, {
-        // Logger for progress updates
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            // Progress updates — could be used for UI
-          }
-        },
-        // Worker path: local file via Chrome extension web-accessible resource
-        workerPath: `${extensionUrl}worker.min.js`,
-      });
+    this._worker = await Tesseract.createWorker(langs, 1, {
+      logger: (m) => {
+        if (m.status === "loading language traineddata") {
+          console.log(`[Rikai] OCR: Downloading trained data: ${m.loadedName || m.progress}`);
+        } else if (m.status === "initializing api") {
+          console.log("[Rikai] OCR: Initializing Tesseract API...");
+        } else if (m.status === "recognizing text") {
+          // progress available here if needed
+        }
+      },
+      workerPath: `${extensionUrl}worker.min.js`,
+    });
 
-      this._initialized = true;
-      console.log("[Rikai] OCR: Worker initialized successfully.");
-    } catch (err) {
-      console.error("[Rikai] OCR: Failed to initialize worker:", err);
-      throw err;
-    }
+    this._loadedLangs = langs;
+    this._initialized = true;
+    console.log(`[Rikai] OCR: Worker initialized with languages: ${langs}`);
   }
 
   /**
-   * Process a single image and detect text regions.
-   * @param {string} imageUrl - URL of the image to process
-   * @param {string} imageId  - ID of the image record
+   * Process a single image element.
+   * @param {HTMLImageElement|HTMLCanvasElement} element
+   * @param {string} imageId
    * @returns {Promise<OcrResult>}
    */
-  async recognizeImage(imageUrl, imageId) {
+  async recognizeImage(element, imageId) {
     await this.initialize();
 
     const startTime = performance.now();
 
     try {
-      // Run OCR on the image
-      const result = await this._worker.recognize(imageUrl);
+      const canvas = this._imageToCanvas(element);
+      console.log(`[Rikai] OCR: Processing ${imageId} (${canvas.width}×${canvas.height})`);
+
+      const result = await this._worker.recognize(canvas);
 
       const regions = this._extractRegions(result.data, imageId);
       const imageLang = this._detectImageLanguage(result.data);
 
       const processingTime = performance.now() - startTime;
-
       console.log(
-        `[Rikai] OCR: Processed image ${imageId} in ${processingTime.toFixed(0)}ms, ` +
-          `found ${regions.length} text regions (lang: ${imageLang}).`
+        `[Rikai] OCR: Done ${imageId} in ${processingTime.toFixed(0)}ms — ` +
+          `${regions.length} text regions found (lang: ${imageLang})`
       );
 
-      return {
-        imageId,
-        regions,
-        imageLang,
-        processingTime,
-      };
+      // Debug: log raw words count
+      const wordCount = result.data?.words?.length || 0;
+      const meanConf = wordCount > 0
+        ? (result.data.words.reduce((s, w) => s + w.confidence, 0) / wordCount).toFixed(1)
+        : "N/A";
+      console.log(`[Rikai] OCR: Raw words: ${wordCount}, mean confidence: ${meanConf}`);
+
+      if (wordCount > 0 && regions.length === 0) {
+        console.log("[Rikai] OCR: Words detected but filtered out (below threshold or noise)");
+        // Log first few raw words for debugging
+        const sample = result.data.words.slice(0, 5).map((w) => `"${w.text}" (${w.confidence.toFixed(1)}, ${w.lang})`);
+        console.log("[Rikai] OCR: Sample raw words:", sample);
+      }
+
+      return { imageId, regions, imageLang, processingTime };
     } catch (err) {
-      console.error(`[Rikai] OCR: Failed to process image ${imageId}:`, err);
+      console.error(`[Rikai] OCR: Failed to process ${imageId}:`, err);
       return {
         imageId,
         regions: [],
@@ -157,23 +143,23 @@ class OcrEngine {
   }
 
   /**
-   * Process multiple images with concurrency control.
-   * @param {Array<{ id: string, src: string }>} images
-   * @param {function} [onProgress] - Callback with (completedCount, totalCount)
+   * Process multiple images.
+   * @param {Array<{ id: string, element: HTMLImageElement|HTMLCanvasElement }>} images
+   * @param {string} lang - Language selection ("jpn", "kor", or "both")
+   * @param {function} [onProgress]
    * @returns {Promise<OcrResult[]>}
    */
-  async recognizeImages(images, onProgress) {
-    await this.initialize();
+  async recognizeImages(images, lang = "jpn", onProgress) {
+    await this.initialize(lang);
 
     const results = [];
     let completed = 0;
     const total = images.length;
 
-    // Process in batches for concurrency control
     for (let i = 0; i < images.length; i += OCR_CONFIG.maxConcurrent) {
       const batch = images.slice(i, i + OCR_CONFIG.maxConcurrent);
       const batchResults = await Promise.all(
-        batch.map((img) => this.recognizeImage(img.src, img.id))
+        batch.map((img) => this.recognizeImage(img.element, img.id))
       );
       results.push(...batchResults);
       completed += batch.length;
@@ -186,71 +172,59 @@ class OcrEngine {
     return results;
   }
 
-  /**
-   * Terminate the worker and free resources.
-   */
   async terminate() {
     if (this._worker) {
       await this._worker.terminate();
       this._worker = null;
       this._initialized = false;
+      this._loadedLangs = null;
       console.log("[Rikai] OCR: Worker terminated.");
     }
   }
 
+  // ─── Private: CORS Bypass ───────────────────────────────────────────
+
+  _imageToCanvas(element) {
+    const canvas = document.createElement("canvas");
+    const width = element.naturalWidth || element.width;
+    const height = element.naturalHeight || element.height;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(element, 0, 0, width, height);
+    return canvas;
+  }
+
   // ─── Private: Region Extraction ─────────────────────────────────────
 
-  /**
-   * Extract text regions from Tesseract.js recognition data.
-   * Converts Tesseract's word/line data into our TextRegion format.
-   * @param {Object} data - Tesseract.js recognition result data
-   * @param {string} imageId
-   * @returns {TextRegion[]}
-   */
   _extractRegions(data, imageId) {
     const regions = [];
-
     if (!data || !data.words) return regions;
 
-    // Group words into lines for better region detection
     const lines = this._groupWordsIntoLines(data.words);
 
     for (const line of lines) {
       if (line.text.trim().length === 0) continue;
-
-      // Filter by confidence
       if (line.confidence < OCR_CONFIG.minConfidence) continue;
-
-      // Filter out pure numbers/symbols that are likely noise
       if (this._isNoiseText(line.text)) continue;
-
-      // Determine language of this specific region
-      const lang = this._detectRegionLanguage(line);
 
       regions.push({
         text: line.text.trim(),
         confidence: line.confidence,
         bbox: line.bbox,
-        lang,
+        lang: line.lang || "unknown",
       });
     }
 
-    // Sort by position (top-to-bottom, right-to-left for manga)
     regions.sort((a, b) => {
-      // Primary sort: vertical position (top to bottom)
       const yDiff = a.bbox.y - b.bbox.y;
       if (Math.abs(yDiff) > 10) return yDiff;
-
-      // Secondary sort: horizontal position (right to left for manga)
       return b.bbox.x - a.bbox.x;
     });
 
     return regions;
   }
 
-  /**
-   * Group individual words into lines based on spatial proximity.
-   */
   _groupWordsIntoLines(words) {
     if (words.length === 0) return [];
 
@@ -260,20 +234,19 @@ class OcrEngine {
       text: words[0].text,
       confidence: words[0].confidence,
       bbox: { ...words[0].bbox },
+      lang: words[0].lang,
     };
 
     for (let i = 1; i < words.length; i++) {
       const word = words[i];
       const prevWord = currentLine.words[currentLine.words.length - 1];
 
-      // Check if this word is on the same line as the previous word
       if (this._areWordsOnSameLine(prevWord, word)) {
         currentLine.words.push(word);
         currentLine.text += " " + word.text;
         currentLine.confidence =
           (currentLine.confidence * (currentLine.words.length - 1) + word.confidence) /
           currentLine.words.length;
-        // Expand bbox
         currentLine.bbox = this._mergeBboxes(currentLine.bbox, word.bbox);
       } else {
         lines.push(currentLine);
@@ -282,6 +255,7 @@ class OcrEngine {
           text: word.text,
           confidence: word.confidence,
           bbox: { ...word.bbox },
+          lang: word.lang,
         };
       }
     }
@@ -290,29 +264,17 @@ class OcrEngine {
     return lines;
   }
 
-  /**
-   * Check if two words are on the same line.
-   */
   _areWordsOnSameLine(word1, word2) {
-    const bbox1 = word1.bbox;
-    const bbox2 = word2.bbox;
-
-    // Vertical overlap check
-    const overlapY = Math.min(bbox1.y + bbox1.height, bbox2.y + bbox2.height) - Math.max(bbox1.y, bbox2.y);
-    const minHeight = Math.min(bbox1.height, bbox2.height);
-
-    // Words are on the same line if they have significant vertical overlap
-    // and are reasonably close horizontally
+    const b1 = word1.bbox;
+    const b2 = word2.bbox;
+    const overlapY = Math.min(b1.y + b1.height, b2.y + b2.height) - Math.max(b1.y, b2.y);
+    const minHeight = Math.min(b1.height, b2.height);
     const verticalOverlap = overlapY / minHeight > 0.5;
-    const horizontalGap = Math.abs(bbox2.x - (bbox1.x + bbox1.width));
-    const maxGap = Math.max(bbox1.width, bbox2.width) * 2;
-
+    const horizontalGap = Math.abs(b2.x - (b1.x + b1.width));
+    const maxGap = Math.max(b1.width, b2.width) * 2;
     return verticalOverlap && horizontalGap < maxGap;
   }
 
-  /**
-   * Merge two bounding boxes into one.
-   */
   _mergeBboxes(b1, b2) {
     const x = Math.min(b1.x, b2.x);
     const y = Math.min(b1.y, b2.y);
@@ -321,23 +283,13 @@ class OcrEngine {
     return { x, y, width: right - x, height: bottom - y };
   }
 
-  // ─── Private: Language Detection ────────────────────────────────────
-
-  /**
-   * Detect the primary language of the entire image.
-   * @param {Object} data - Tesseract.js data
-   * @returns {string}
-   */
   _detectImageLanguage(data) {
     if (!data || !data.words || data.words.length === 0) return "unknown";
-
     const langCounts = {};
     for (const word of data.words) {
       const lang = word.lang || "unknown";
       langCounts[lang] = (langCounts[lang] || 0) + 1;
     }
-
-    // Find the most common language
     let maxCount = 0;
     let primaryLang = "unknown";
     for (const [lang, count] of Object.entries(langCounts)) {
@@ -346,38 +298,17 @@ class OcrEngine {
         primaryLang = lang;
       }
     }
-
     return primaryLang;
   }
 
-  /**
-   * Detect the language of a specific text region.
-   */
-  _detectRegionLanguage(word) {
-    // Tesseract.js provides language info per word
-    return word.lang || "unknown";
-  }
-
-  // ─── Private: Text Filtering ────────────────────────────────────────
-
-  /**
-   * Check if detected text is likely noise (not real manga text).
-   */
   _isNoiseText(text) {
-    // Pure numbers
-    if (/^\d+[\.,]?\d*$/.test(text)) return true;
-
-    // Very short and likely punctuation
+    if (/^\d+[.,]?\d*$/.test(text)) return true;
     if (text.length <= 1 && /[^\w\u3000-\u9FFF\uAC00-\uD7AF]/.test(text)) return true;
-
-    // Common OCR noise patterns
     if (/^[.\-_=*#@$%^&]+$/.test(text)) return true;
-
     return false;
   }
 }
 
-// Export for use in content.js
 if (typeof window !== "undefined") {
   window.RikaiOcrEngine = OcrEngine;
 }

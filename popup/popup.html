@@ -11,8 +11,30 @@
     <h1 class="title">Rikai</h1>
     <p class="subtitle">Translate manga &amp; webtoons on the page</p>
 
+    <div class="lang-selector">
+      <label class="lang-option">
+        <input type="radio" name="lang" value="jpn" checked>
+        <span class="lang-chip">🇯🇵 Japanese</span>
+      </label>
+      <label class="lang-option">
+        <input type="radio" name="lang" value="kor">
+        <span class="lang-chip">🇰🇷 Korean</span>
+      </label>
+      <label class="lang-option">
+        <input type="radio" name="lang" value="both">
+        <span class="lang-chip">Both</span>
+      </label>
+    </div>
+
     <button id="translate-btn" class="btn btn-primary">Translate Page</button>
-    <button id="toggle-btn" class="btn btn-secondary" hidden>Toggle Translation</button>
+
+    <div id="toggle-container" class="toggle-container" hidden>
+      <span class="toggle-label">Translations</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="toggle-checkbox" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
 
     <div id="status" class="status" hidden>
       <span id="status-icon"></span>

@@ -8,6 +8,8 @@
 
   const state = {
     translationActive: false,
+    /** @type {string} Selected language: "jpn", "kor", or "both" */
+    lang: "jpn",
     /** @type {import('./image-extractor').ImageRecord[]} */
     extractedImages: [],
     /** @type {import('./ocr').OcrResult[]} */
@@ -82,6 +84,10 @@
   async function handleTranslatePage(message, sendResponse) {
     console.log("[Rikai] Received 'translatePage' command.");
 
+    // Store language selection
+    state.lang = message.lang || "jpn";
+    console.log(`[Rikai] Language: ${state.lang}`);
+
     try {
       // Step 1: Scan for images
       state.extractedImages = extractor.scan();
@@ -102,15 +108,22 @@
       }
 
       // Step 2: Process OCR on all discovered images
+      // Pass DOM elements (not URLs) so we can draw them to canvas and bypass CORS
       console.log("[Rikai] Starting OCR processing...");
-      const imagesToProcess = state.extractedImages.map((img) => ({
-        id: img.id,
-        src: img.src,
-      }));
+      const imagesToProcess = state.extractedImages
+        .filter((img) => img.element && img.element instanceof HTMLElement)
+        .map((img) => ({
+          id: img.id,
+          element: img.element,
+        }));
 
-      state.ocrResults = await ocrEngine.recognizeImages(imagesToProcess, (done, total) => {
-        console.log(`[Rikai] OCR progress: ${done}/${total}`);
-      });
+      state.ocrResults = await ocrEngine.recognizeImages(
+        imagesToProcess,
+        state.lang,
+        (done, total) => {
+          console.log(`[Rikai] OCR progress: ${done}/${total}`);
+        }
+      );
 
       // Track which images have been processed
       for (const result of state.ocrResults) {
@@ -259,12 +272,12 @@
       let imagesToProcess;
       if (imageIds && imageIds.length > 0) {
         imagesToProcess = state.extractedImages
-          .filter((img) => imageIds.includes(img.id))
-          .map((img) => ({ id: img.id, src: img.src }));
+          .filter((img) => imageIds.includes(img.id) && img.element instanceof HTMLElement)
+          .map((img) => ({ id: img.id, element: img.element }));
       } else {
         imagesToProcess = state.extractedImages
-          .filter((img) => !state.processedImageIds.has(img.id))
-          .map((img) => ({ id: img.id, src: img.src }));
+          .filter((img) => !state.processedImageIds.has(img.id) && img.element instanceof HTMLElement)
+          .map((img) => ({ id: img.id, element: img.element }));
       }
 
       if (imagesToProcess.length === 0) {
