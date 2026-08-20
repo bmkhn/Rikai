@@ -71,18 +71,24 @@ class OcrEngine {
     }
 
     const extensionUrl = chrome.runtime.getURL("lib/tesseract/");
+    const langPath = chrome.runtime.getURL("lib/tesseract/traineddata/");
+
+    console.log(`[Rikai] OCR: langPath = ${langPath}`);
 
     this._worker = await Tesseract.createWorker(langs, 1, {
       logger: (m) => {
         if (m.status === "loading language traineddata") {
-          console.log(`[Rikai] OCR: Downloading trained data: ${m.loadedName || m.progress}`);
+          console.log(`[Rikai] OCR: Loading trained data: ${m.loadedName || m.progress}`);
         } else if (m.status === "initializing api") {
           console.log("[Rikai] OCR: Initializing Tesseract API...");
         } else if (m.status === "recognizing text") {
-          // progress available here if needed
+          // progress
+        } else {
+          console.log(`[Rikai] OCR: ${m.status}`);
         }
       },
       workerPath: `${extensionUrl}worker.min.js`,
+      langPath: langPath,
     });
 
     this._loadedLangs = langs;

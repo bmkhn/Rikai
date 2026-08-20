@@ -38,7 +38,9 @@
     {
       "resources": [
         "lib/tesseract/tesseract.min.js",
-        "lib/tesseract/worker.min.js"
+        "lib/tesseract/worker.min.js",
+        "lib/tesseract/traineddata/jpn.traineddata",
+        "lib/tesseract/traineddata/kor.traineddata"
       ],
       "matches": ["<all_urls>"]
     }
