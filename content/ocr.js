@@ -93,7 +93,8 @@ class OcrEngine {
       console.log(`[Rikai] OCR: Extension URL: ${extensionUrl}`);
 
       // Create a worker with language configuration
-      // For Chrome extensions, we need to specify the worker path
+      // For Chrome extensions, we need to specify the worker path via web-accessible resources.
+      // Do NOT set corePath — Tesseract.js downloads the WASM core from its default CDN.
       this._worker = await Tesseract.createWorker(OCR_CONFIG.langs, 1, {
         // Logger for progress updates
         logger: (m) => {
@@ -101,10 +102,8 @@ class OcrEngine {
             // Progress updates — could be used for UI
           }
         },
-        // Worker path for Chrome extension (web-accessible resource)
+        // Worker path: local file via Chrome extension web-accessible resource
         workerPath: `${extensionUrl}worker.min.js`,
-        // Core path for WASM files (Tesseract.js will download if not found)
-        corePath: `${extensionUrl}tesseract-core-simd.wasm.js`,
       });
 
       this._initialized = true;

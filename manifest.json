@@ -37,11 +37,7 @@
     {
       "resources": [
         "lib/tesseract/tesseract.min.js",
-        "lib/tesseract/worker.min.js",
-        "lib/tesseract/tesseract-core-simd.wasm.js",
-        "lib/tesseract/tesseract-core-simd-lstm.wasm.js",
-        "lib/tesseract/tesseract-core.wasm.js",
-        "lib/tesseract/tesseract-core-lstm.wasm.js"
+        "lib/tesseract/worker.min.js"
       ],
       "matches": ["<all_urls>"]
     }
