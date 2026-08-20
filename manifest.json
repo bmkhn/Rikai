@@ -26,6 +26,7 @@
       "js": [
         "content/image-extractor.js",
         "content/ocr.js",
+        "content/translator.js",
         "content/content.js"
       ],
       "run_at": "document_idle"

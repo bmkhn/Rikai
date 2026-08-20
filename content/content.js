@@ -12,6 +12,8 @@
     extractedImages: [],
     /** @type {import('./ocr').OcrResult[]} */
     ocrResults: [],
+    /** @type {import('./translator').BatchTranslationResult[]} */
+    translations: [],
     /** @type {Set<string>} IDs of images that have been OCR'd */
     processedImageIds: new Set(),
   };
@@ -23,6 +25,9 @@
 
   /** @type {import('./ocr').OcrEngine} */
   const ocrEngine = new window.RikaiOcrEngine();
+
+  /** @type {import('./translator').Translator} */
+  const translator = new window.RikaiTranslator();
 
   // ─── Message Listener ───────────────────────────────────────────────
 
@@ -52,6 +57,14 @@
         handleGetOcrResults(sendResponse);
         return true;
 
+      case "processTranslation":
+        handleProcessTranslation(message, sendResponse);
+        return true;
+
+      case "getTranslations":
+        handleGetTranslations(sendResponse);
+        return true;
+
       default:
         sendResponse({ success: false, message: `Unknown action: ${message.action}` });
     }
@@ -61,9 +74,7 @@
 
   /**
    * Handle the "translatePage" command.
-   * 1. Scans for images
-   * 2. Processes OCR on discovered images
-   * 3. Reports results (translation pipeline will be added later)
+   * Full pipeline: scan images → OCR → translate.
    */
   async function handleTranslatePage(message, sendResponse) {
     console.log("[Rikai] Received 'translatePage' command.");
@@ -82,6 +93,7 @@
           message: "No manga images found on this page.",
           images: [],
           ocrResults: [],
+          translations: [],
         });
         return;
       }
@@ -102,29 +114,37 @@
         state.processedImageIds.add(result.imageId);
       }
 
-      // Step 3: Report results
       const totalRegions = state.ocrResults.reduce((sum, r) => sum + r.regions.length, 0);
-      const totalTime = state.ocrResults.reduce((sum, r) => sum + r.processingTime, 0);
+      console.log(`[Rikai] OCR complete: ${totalRegions} text regions found.`);
 
-      const summary = `${imgCount} images, ${totalRegions} text regions detected (${(totalTime / 1000).toFixed(1)}s)`;
+      // Step 3: Translate all detected text
+      if (totalRegions > 0) {
+        console.log("[Rikai] Starting translation...");
+        state.translations = await translator.translateOcrResults(
+          state.ocrResults,
+          (done, total) => {
+            console.log(`[Rikai] Translation progress: ${done}/${total}`);
+          }
+        );
 
-      console.log(`[Rikai] OCR complete: ${summary}`);
-      console.log(
-        "[Rikai] Text regions:",
-        state.ocrResults.flatMap((r) =>
-          r.regions.map((reg) => ({
-            text: reg.text.substring(0, 30),
-            confidence: reg.confidence.toFixed(2),
-            lang: reg.lang,
-          }))
-        )
-      );
+        const successfulTranslations = state.translations.filter((t) => t.translation.success);
+        console.log(
+          `[Rikai] Translation complete: ${successfulTranslations.length}/${state.translations.length} successful.`
+        );
+      } else {
+        state.translations = [];
+        console.log("[Rikai] No text regions to translate.");
+      }
 
       state.translationActive = true;
 
+      // Build summary
+      const ocrTime = state.ocrResults.reduce((sum, r) => sum + r.processingTime, 0);
+      const summary = `${imgCount} images, ${totalRegions} text regions, ${state.translations.length} translations (${(ocrTime / 1000).toFixed(1)}s OCR)`;
+
       sendResponse({
         success: true,
-        message: `Extracted ${summary}. Translation pipeline not yet implemented.`,
+        message: summary,
         images: state.extractedImages.map((img) => ({
           id: img.id,
           src: img.src,
@@ -138,9 +158,17 @@
           regions: r.regions,
           lang: r.imageLang,
         })),
+        translations: state.translations.map((t) => ({
+          imageId: t.imageId,
+          regionIndex: t.regionIndex,
+          original: t.translation.originalText,
+          translated: t.translation.translatedText,
+          success: t.translation.success,
+          confidence: t.translation.confidence,
+        })),
       });
     } catch (err) {
-      console.error("[Rikai] Translation failed:", err);
+      console.error("[Rikai] Translation pipeline failed:", err);
       sendResponse({
         success: false,
         message: `Error: ${err.message}`,
@@ -157,7 +185,8 @@
     console.log(`[Rikai] Translation toggled: ${state.translationActive ? "ON" : "OFF"}`);
 
     // Future: toggle visibility of translation overlay elements
-    // For now, just log the state
+    // The translations are already cached in state.translations
+    // No need to re-run OCR or translation
 
     sendResponse({
       success: true,
@@ -214,16 +243,14 @@
     console.log("[Rikai] Received 'processOcr' command.");
 
     try {
-      const imageIds = message.imageIds; // Optional: specific images to process
+      const imageIds = message.imageIds;
 
       let imagesToProcess;
       if (imageIds && imageIds.length > 0) {
-        // Process specific images
         imagesToProcess = state.extractedImages
           .filter((img) => imageIds.includes(img.id))
           .map((img) => ({ id: img.id, src: img.src }));
       } else {
-        // Process all unprocessed images
         imagesToProcess = state.extractedImages
           .filter((img) => !state.processedImageIds.has(img.id))
           .map((img) => ({ id: img.id, src: img.src }));
@@ -243,7 +270,6 @@
       // Update state
       for (const result of results) {
         state.processedImageIds.add(result.imageId);
-        // Replace existing result or add new one
         const existingIdx = state.ocrResults.findIndex((r) => r.imageId === result.imageId);
         if (existingIdx >= 0) {
           state.ocrResults[existingIdx] = result;
@@ -282,6 +308,88 @@
         regionCount: r.regions.length,
         regions: r.regions,
         lang: r.imageLang,
+      })),
+    });
+  }
+
+  /**
+   * Handle "processTranslation" — translate OCR results (re-translate or specific regions).
+   */
+  async function handleProcessTranslation(message, sendResponse) {
+    console.log("[Rikai] Received 'processTranslation' command.");
+
+    try {
+      const imageIds = message.imageIds;
+
+      let ocrResultsToTranslate;
+      if (imageIds && imageIds.length > 0) {
+        // Translate specific images
+        ocrResultsToTranslate = state.ocrResults.filter((r) =>
+          imageIds.includes(r.imageId)
+        );
+      } else {
+        // Translate all OCR results
+        ocrResultsToTranslate = state.ocrResults;
+      }
+
+      if (ocrResultsToTranslate.length === 0) {
+        sendResponse({
+          success: true,
+          message: "No OCR results to translate.",
+          translations: [],
+        });
+        return;
+      }
+
+      const translations = await translator.translateOcrResults(ocrResultsToTranslate);
+
+      // Update state
+      for (const t of translations) {
+        const existingIdx = state.translations.findIndex(
+          (existing) =>
+            existing.imageId === t.imageId && existing.regionIndex === t.regionIndex
+        );
+        if (existingIdx >= 0) {
+          state.translations[existingIdx] = t;
+        } else {
+          state.translations.push(t);
+        }
+      }
+
+      sendResponse({
+        success: true,
+        message: `Translated ${translations.length} text regions.`,
+        translations: translations.map((t) => ({
+          imageId: t.imageId,
+          regionIndex: t.regionIndex,
+          original: t.translation.originalText,
+          translated: t.translation.translatedText,
+          success: t.translation.success,
+          confidence: t.translation.confidence,
+        })),
+      });
+    } catch (err) {
+      console.error("[Rikai] Translation processing failed:", err);
+      sendResponse({
+        success: false,
+        message: `Error: ${err.message}`,
+      });
+    }
+  }
+
+  /**
+   * Handle "getTranslations" — return cached translations.
+   */
+  function handleGetTranslations(sendResponse) {
+    sendResponse({
+      success: true,
+      translations: state.translations.map((t) => ({
+        imageId: t.imageId,
+        regionIndex: t.regionIndex,
+        original: t.translation.originalText,
+        translated: t.translation.translatedText,
+        success: t.translation.success,
+        confidence: t.translation.confidence,
       })),
     });
   }

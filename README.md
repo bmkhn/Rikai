@@ -24,7 +24,8 @@ rikai/
 ├── content/
 │   ├── content.js             # Content script (message handler, orchestrator)
 │   ├── image-extractor.js     # Finds manga/webtoon images on the page
-│   └── ocr.js                 # Text detection using Tesseract.js
+│   ├── ocr.js                 # Text detection using Tesseract.js
+│   └── translator.js          # Japanese/Korean → English translation
 ├── lib/
 │   └── tesseract/             # Vendored Tesseract.js files (for Chrome extension)
 ├── icons/
@@ -122,6 +123,8 @@ Popup (popup.js)          Content Script (content.js)
 - ✅ **Smart filtering** — skips icons, ads, avatars, favicons, SVGs, and tiny images
 - ✅ **OCR** — Tesseract.js detects Japanese/Korean text regions with bounding boxes
 - ✅ **Text region extraction** — groups words into lines, filters noise, sorts by position
+- ✅ **Translation** — MyMemory API translates Japanese/Korean text to English
+- ✅ **Batch translation** — processes all text regions with rate limiting
 
 ## Architecture
 
@@ -132,8 +135,8 @@ Modules are organized by concern. Each is an independent, replaceable unit:
 | Message handling    | `content/content.js`         | ✅ Done       |
 | Image extraction    | `content/image-extractor.js` | ✅ Done       |
 | OCR                 | `content/ocr.js`             | ✅ Done       |
+| Translation         | `content/translator.js`      | ✅ Done       |
 | Reader detection    | `content/reader-detector.js` | 🔲 Planned   |
-| Translation         | `content/translator.js`      | 🔲 Planned   |
 | Text masking        | `content/masker.js`          | 🔲 Planned   |
 | Overlay rendering   | `content/overlay.js`         | 🔲 Planned   |
 | Translation state   | `content/state.js`           | 🔲 Planned   |
@@ -145,14 +148,15 @@ Modules are organized by concern. Each is an independent, replaceable unit:
 - **`activeTab` + `scripting` permissions** — minimal permissions; only interacts with the tab the user clicks on
 - **Content script at `document_idle`** — injected after the page DOM is ready
 - **Tesseract.js v5** — client-side OCR for Japanese/Korean text detection (replaceable with cloud API)
+- **MyMemory API** — free translation API, no API key required (5000 words/day)
 - **Web-accessible resources** — allows content scripts to load Tesseract.js WASM/worker files
 
 ## What's Next
 
-1. **Translation API** — translate detected Japanese/Korean text to English
-2. **Text masking** — cover original text in the image
-3. **Overlay rendering** — position English text over the masked regions
-4. **Toggle mechanism** — show/hide translations without re-processing
+1. **Text masking** — cover original text in the image
+2. **Overlay rendering** — position English text over the masked regions
+3. **Toggle mechanism** — show/hide translations without re-processing
+4. **Reader detection** — identify manga/webtoon reader patterns automatically
 
 ## License
 
