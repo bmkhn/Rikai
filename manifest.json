@@ -23,8 +23,25 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content/image-extractor.js", "content/content.js"],
+      "js": [
+        "content/image-extractor.js",
+        "content/ocr.js",
+        "content/content.js"
+      ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "lib/tesseract/tesseract.min.js",
+        "lib/tesseract/worker.min.js",
+        "lib/tesseract/tesseract-core-simd.wasm.js",
+        "lib/tesseract/tesseract-core-simd-lstm.wasm.js",
+        "lib/tesseract/tesseract-core.wasm.js",
+        "lib/tesseract/tesseract-core-lstm.wasm.js"
+      ],
+      "matches": ["<all_urls>"]
     }
   ]
 }
