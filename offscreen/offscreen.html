@@ -5,10 +5,10 @@
   <title>Rikai — OCR Engine</title>
 </head>
 <body>
-  <!-- Rikai offscreen document: hosts MangaOCR (Transformers.js) + text detection.
+  <!-- Rikai offscreen document: hosts MangaOCR + text detection.
        Runs at extension origin with full DOM/canvas APIs and extension host permissions. -->
-  <script src="text-detector.js"></script>
-  <script src="offscreen.js"></script>
+  <script src="../dist/offscreen/text-detector.js"></script>
+  <script src="../dist/offscreen/offscreen.js"></script>
   <script type="module" src="../dist/offscreen-ocr.js"></script>
 </body>
 </html>

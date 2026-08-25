@@ -1,32 +1,29 @@
 // Rikai popup — control panel.
-// Sends ACTIVATE/DEACTIVATE to the content script of the active tab and
-// mirrors real state. Closing this popup never stops the translator; the
-// content script owns the engine.
 
-const powerToggle = document.getElementById("power-toggle");
-const statusCore = document.getElementById("status-core");
-const statusMain = document.getElementById("status-main");
-const ocrStateEl = document.getElementById("ocr-state");
-const trStateEl = document.getElementById("tr-state");
-const detailEl = document.getElementById("detail");
-const retryBtn = document.getElementById("retry-btn");
+const powerToggle = document.getElementById("power-toggle") as HTMLInputElement;
+const statusCore = document.getElementById("status-core") as HTMLElement;
+const statusMain = document.getElementById("status-main") as HTMLElement;
+const ocrStateEl = document.getElementById("ocr-state") as HTMLElement;
+const trStateEl = document.getElementById("tr-state") as HTMLElement;
+const detailEl = document.getElementById("detail") as HTMLElement;
+const retryBtn = document.getElementById("retry-btn") as HTMLElement;
 
-let currentTabId = null;
-let pollTimer = null;
-let lastPhase = null;
+let currentTabId: number | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let lastPhase: string | null = null;
 
 // ─── Init ──────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", init);
 
-async function init() {
+async function init(): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !/^https?:/i.test(tab.url || "")) {
       render("UNSUPPORTED", "Open a normal web page to use Rikai.");
       return;
     }
-    currentTabId = tab.id;
+    currentTabId = tab.id ?? null;
 
     const bgState = await chrome.runtime
       .sendMessage({ type: "RIKAI_GET_TAB_STATE" })
@@ -35,7 +32,7 @@ async function init() {
     powerToggle.checked = bgState.state !== "OFF";
     await refreshFromTab();
     startPolling();
-  } catch (err) {
+  } catch (err: any) {
     render("UNSUPPORTED", String(err?.message || err));
   }
 }
@@ -46,7 +43,7 @@ retryBtn.addEventListener("click", () => {
   sendToTab(currentTabId, { type: "RIKAI_ACTIVATE" });
 });
 
-async function onToggle() {
+async function onToggle(): Promise<void> {
   const turnOn = powerToggle.checked;
   const type = turnOn ? "RIKAI_ACTIVATE" : "RIKAI_DEACTIVATE";
 
@@ -66,7 +63,7 @@ async function onToggle() {
   refreshFromTab();
 }
 
-function sendToTab(tabId, message) {
+function sendToTab(tabId: number | null, message: any): Promise<any> {
   if (typeof tabId !== "number") {
     return Promise.reject(new Error("no tab"));
   }
@@ -75,25 +72,24 @@ function sendToTab(tabId, message) {
 
 // ─── State polling ─────────────────────────────────────────────────────
 
-function startPolling() {
+function startPolling(): void {
   stopPolling();
   pollTimer = setInterval(refreshFromTab, 900);
   window.addEventListener("unload", stopPolling);
 }
 
-function stopPolling() {
+function stopPolling(): void {
   if (pollTimer != null) {
     clearInterval(pollTimer);
     pollTimer = null;
   }
 }
 
-async function refreshFromTab() {
-  let response;
+async function refreshFromTab(): Promise<void> {
+  let response: any;
   try {
     response = await sendToTab(currentTabId, { type: "RIKAI_GET_STATUS" });
   } catch {
-    // No content script receiver → nothing running here
     if (!powerToggle.checked) {
       render("OFF", null);
     }
@@ -105,7 +101,7 @@ async function refreshFromTab() {
   }
 }
 
-function syncToggle(phase) {
+function syncToggle(phase: string): void {
   const shouldBeOn = phase !== "OFF" && phase !== "UNSUPPORTED";
   if (powerToggle.checked !== shouldBeOn) {
     powerToggle.checked = shouldBeOn;
@@ -114,7 +110,7 @@ function syncToggle(phase) {
 
 // ─── Rendering ─────────────────────────────────────────────────────────
 
-const PHASE_LABELS = {
+const PHASE_LABELS: Record<string, string> = {
   OFF: "OFFLINE",
   LOADING: "INITIALIZING",
   READY: "ONLINE",
@@ -123,7 +119,7 @@ const PHASE_LABELS = {
   UNSUPPORTED: "UNAVAILABLE",
 };
 
-const TONES = {
+const TONES: Record<string, string> = {
   OFF: "off",
   LOADING: "loading",
   READY: "on",
@@ -132,7 +128,7 @@ const TONES = {
   UNSUPPORTED: "error",
 };
 
-const OCR_LABELS = {
+const OCR_LABELS: Record<string, [string, string]> = {
   OFF: ["—", ""],
   LOADING: ["LOADING", "warn"],
   READY: ["MangaOCR · READY", "ok"],
@@ -141,7 +137,7 @@ const OCR_LABELS = {
   UNSUPPORTED: ["—", ""],
 };
 
-const TR_LABELS = {
+const TR_LABELS: Record<string, [string, string]> = {
   OFF: ["STANDBY", ""],
   LOADING: ["WAITING", "warn"],
   READY: ["READY", "ok"],
@@ -150,7 +146,7 @@ const TR_LABELS = {
   UNSUPPORTED: ["—", ""],
 };
 
-function render(phase, detail) {
+function render(phase: string, detail: string | null): void {
   const label = PHASE_LABELS[phase] || phase.toUpperCase();
   statusCore.dataset.tone = TONES[phase] || "off";
   statusMain.textContent = label;
@@ -163,7 +159,6 @@ function render(phase, detail) {
   trStateEl.textContent = trText;
   trStateEl.className = `row-value ${trTone}`.trim();
 
-  // Show detail text only when it adds information
   if (detail && (phase === "ERROR" || phase === "UNSUPPORTED")) {
     detailEl.hidden = false;
     detailEl.textContent = humanize(detail);
@@ -175,8 +170,7 @@ function render(phase, detail) {
   lastPhase = phase;
 }
 
-function humanize(text) {
-  // Keep console for stack traces; show a short friendly line in the popup.
+function humanize(text: string): string {
   if (/Receiving end/i.test(text)) {
     return "Refresh the page, then switch Rikai ON.";
   }
@@ -186,7 +180,7 @@ function humanize(text) {
   return text.length > 120 ? `${text.slice(0, 117)}…` : text;
 }
 
-function showError(headline, detail) {
+function showError(headline: string, detail: string): void {
   statusCore.dataset.tone = "error";
   statusMain.textContent = headline;
   detailEl.hidden = false;
@@ -196,7 +190,7 @@ function showError(headline, detail) {
   ocrStateEl.className = "row-value bad";
 }
 
-function hideError() {
+function hideError(): void {
   detailEl.hidden = true;
   retryBtn.hidden = true;
 }

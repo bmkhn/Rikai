@@ -1,81 +1,115 @@
 // Rikai Offscreen Document — OCR orchestration
-//
-// Receives requests from content scripts, decodes manga images, detects text
-// regions (RikaiTextDetector), crops them, and runs each crop through the
-// bundled MangaOCR engine (window.RikaiMangaOcr from dist/offscreen-ocr.js).
-//
-// Message protocol (chrome.runtime):
-//   Content -> here:  { target: "rikai-offscreen", type: "INIT"|"PROCESS_IMAGE", requestId, payload }
-//   Here -> sender:   { source: "rikai-offscreen", requestId, type: "PROGRESS"|"READY"|"RESULT"|"ERROR", ... }
-//
-// Inference requests are serialized — the WASM runtime processes one at a time.
+
+interface OffscreenMessage {
+  target?: string;
+  type?: string;
+  requestId?: number;
+  payload?: {
+    image?: { kind: "url" | "dataurl"; value: string };
+    requestId?: number;
+  };
+}
+
+interface OffscreenResponse {
+  source: string;
+  requestId: number | null;
+  type?: string;
+  regions?: OcrRegion[];
+  error?: string;
+  phase?: string;
+  percent?: number;
+  [key: string]: any;
+}
+
+interface OcrRegion {
+  box: { x: number; y: number; width: number; height: number };
+  japanese: string;
+  confidence: number;
+}
+
+interface ImageRef {
+  kind: "url" | "dataurl";
+  value: string;
+}
 
 (() => {
   "use strict";
 
   const SOURCE = "rikai-offscreen";
-  const detector = new window.RikaiTextDetector();
+  const detector = new (window as any).RikaiTextDetector();
 
-  /** Serializes PROCESS_IMAGE handling so the model never runs concurrently. */
-  let workChain = Promise.resolve();
+  let workChain: Promise<void> = Promise.resolve();
 
   // ─── Messaging ───────────────────────────────────────────────────────
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.target !== SOURCE) return undefined;
+  chrome.runtime.onMessage.addListener(
+    (
+      message: OffscreenMessage,
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response?: any) => void
+    ) => {
+      if (!message || message.target !== SOURCE) return undefined;
 
-    const { type, requestId } = message;
+      const { type, requestId } = message;
 
-    if (type === "INIT") {
-      handleInit(requestId, sendResponse);
-      return true; // async response
-    }
+      if (type === "INIT") {
+        handleInit(requestId ?? 0, sendResponse);
+        return true;
+      }
 
-    if (type === "PROCESS_IMAGE") {
-      const payload = message.payload || {};
-      workChain = workChain
-        .then(() => handleProcessImage(payload, sendResponse))
-        .catch((err) => {
-          console.error("[Rikai OCR] Pipeline error:", err);
-          respond(sendResponse, requestId, {
-            type: "ERROR",
-            phase: "process",
-            error: String(err?.message || err),
+      if (type === "PROCESS_IMAGE") {
+        const payload = message.payload || {};
+        workChain = workChain
+          .then(() => handleProcessImage(payload, sendResponse))
+          .catch((err: Error) => {
+            console.error("[Rikai OCR] Pipeline error:", err);
+            respond(sendResponse, requestId ?? null, {
+              type: "ERROR",
+              phase: "process",
+              error: String(err?.message || err),
+            });
           });
-        });
-      return true; // async response
+        return true;
+      }
+
+      respond(sendResponse, requestId ?? null, {
+        type: "ERROR",
+        error: `Unknown offscreen request type: ${type}`,
+      });
+      return false;
     }
+  );
 
-    respond(sendResponse, requestId, {
-      type: "ERROR",
-      error: `Unknown offscreen request type: ${type}`,
-    });
-    return false;
-  });
-
-  function respond(sendResponse, requestId, extra) {
+  function respond(
+    sendResponse: (response?: any) => void,
+    requestId: number | null,
+    extra: Record<string, any>
+  ): void {
     try {
       sendResponse({ source: SOURCE, requestId: requestId ?? null, ...extra });
     } catch {
-      // Port closed (e.g. page navigated) — nothing to do.
+      // Port closed
     }
   }
 
   // ─── INIT ────────────────────────────────────────────────────────────
 
-  async function handleInit(requestId, sendResponse) {
+  async function handleInit(
+    requestId: number,
+    sendResponse: (response?: any) => void
+  ): Promise<void> {
     const t0 = performance.now();
     try {
-      if (!window.RikaiMangaOcr) {
+      if (!(window as any).RikaiMangaOcr) {
         throw new Error("MangaOCR bundle not loaded.");
       }
-      await window.RikaiMangaOcr.init((p) =>
+      await (window as any).RikaiMangaOcr.init((p: any) =>
         respond(sendResponse, null, { type: "PROGRESS", phase: "model-load", ...p })
       );
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
       console.log(`[Rikai OCR] Model ready in ${elapsed}s`);
       respond(sendResponse, requestId, { type: "READY" });
-    } catch (err) {
+    } catch (err: any) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
       console.error(`[Rikai OCR] Initialization failed after ${elapsed}s:`, err);
       respond(sendResponse, requestId, {
@@ -88,35 +122,31 @@
 
   // ─── PROCESS_IMAGE ───────────────────────────────────────────────────
 
-  /**
-   * Full pipeline for one manga image:
-   * decode → detect regions → crop each region → MangaOCR → Japanese text.
-   */
-  async function handleProcessImage(payload, sendResponse) {
+  async function handleProcessImage(
+    payload: any,
+    sendResponse: (response?: any) => void
+  ): Promise<void> {
     const requestId = payload.requestId;
     const t0 = performance.now();
 
     try {
-      if (!window.RikaiMangaOcr) {
+      if (!(window as any).RikaiMangaOcr) {
         throw new Error("MangaOCR bundle not loaded.");
       }
 
       const image = await loadImage(payload.image);
 
-      // Text detection (where is the text?)
-      const boxes = detector.detect(image);
+      const boxes: BBox[] = detector.detect(image);
 
-      // Recognition (what does it say?) — one crop at a time
-      /** @type {{ box: any, japanese: string, confidence: number }[]} */
-      const regions = [];
+      const regions: OcrRegion[] = [];
       for (const box of boxes) {
         try {
           const dataUrl = await cropToDataUrl(image, box);
-          const japanese = await window.RikaiMangaOcr.recognize(dataUrl);
+          const japanese: string = await (window as any).RikaiMangaOcr.recognize(dataUrl);
           if (!japanese) continue;
 
           const confidence = japaneseQuality(japanese);
-          if (confidence <= 0.5) continue; // mostly non-Japanese noise
+          if (confidence <= 0.5) continue;
 
           regions.push({ box, japanese, confidence });
         } catch (err) {
@@ -124,15 +154,20 @@
         }
       }
 
-      // Release the decoded image promptly
-      if (image.close && typeof image.close === "function" && !(image instanceof HTMLImageElement)) {
-        image.close();
+      if (
+        image &&
+        typeof (image as any).close === "function" &&
+        !(image instanceof HTMLImageElement)
+      ) {
+        (image as any).close();
       }
 
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-      console.log(`[Rikai OCR] Image processed in ${elapsed}s — ${regions.length} region(s)`);
+      console.log(
+        `[Rikai OCR] Image processed in ${elapsed}s — ${regions.length} region(s)`
+      );
       respond(sendResponse, requestId, { type: "RESULT", regions });
-    } catch (err) {
+    } catch (err: any) {
       console.error("[Rikai OCR] Process failed:", err);
       respond(sendResponse, requestId, {
         type: "ERROR",
@@ -142,17 +177,18 @@
     }
   }
 
-  /**
-   * Load an image reference into a decodable element.
-   * @param {{ kind: "url"|"dataurl", value: string }} ref
-   * @returns {Promise<HTMLImageElement>}
-   */
-  async function loadImage(ref) {
+  interface BBox {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  async function loadImage(ref: ImageRef): Promise<HTMLImageElement> {
     if (!ref || !ref.value) throw new Error("No image reference provided.");
 
     let url = ref.value;
     if (ref.kind === "url") {
-      // Extension host permissions allow reading cross-origin images here.
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Image fetch failed: HTTP ${response.status}`);
@@ -165,34 +201,29 @@
     img.src = url;
     try {
       await img.decode();
-    } catch (err) {
+    } catch (err: any) {
       URL.revokeObjectURL(url);
       throw new Error(`Image decode failed: ${err?.message || err}`);
     }
     if (url.startsWith("blob:")) {
-      // Keep the object URL alive until decoding is done, then release it.
       img.addEventListener("load", () => {}, { once: true });
       setTimeout(() => URL.revokeObjectURL(url), 30_000);
     }
     return img;
   }
 
-  /**
-   * Crop a region from the image and return a PNG data URL.
-   * Small crops are upscaled so the recognizer gets enough pixels to work with
-   * (the model's processor resizes to 224×224 internally).
-   */
-  async function cropToDataUrl(image, box) {
-    const naturalW = image.naturalWidth || image.width;
-    const naturalH = image.naturalHeight || image.height;
+  async function cropToDataUrl(
+    image: HTMLImageElement,
+    box: BBox
+  ): Promise<string> {
+    const naturalW = image.naturalWidth || (image as any).width;
+    const naturalH = image.naturalHeight || (image as any).height;
 
-    // Clamp the box defensively
     const x = Math.max(0, Math.min(box.x, naturalW - 1));
     const y = Math.max(0, Math.min(box.y, naturalH - 1));
     const w = Math.max(1, Math.min(box.width, naturalW - x));
     const h = Math.max(1, Math.min(box.height, naturalH - y));
 
-    // Upscale small crops so short text stays legible after processor resize
     const minSide = Math.min(w, h);
     const scale = minSide < 64 ? Math.min(4, 64 / minSide) : 1;
 
@@ -200,7 +231,7 @@
       Math.round(w * scale),
       Math.round(h * scale)
     );
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(image, x, y, w, h, 0, 0, canvas.width, canvas.height);
@@ -209,7 +240,7 @@
     return blobToDataUrl(blob);
   }
 
-  function blobToDataUrl(blob) {
+  function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
@@ -218,15 +249,9 @@
     });
   }
 
-  function url_revokePlaceholder() {}
-
-  /**
-   * Rough quality signal: fraction of characters that are actual Japanese.
-   * MangaOCR has no native confidence score, so we report how much of its
-   * output is kana/kanji. This is NOT a fabricated percentage of accuracy.
-   */
-  function japaneseQuality(text) {
+  function japaneseQuality(text: string): number {
     if (!text) return 0;
     const jpChars = text.match(/[\u3040-\u30ff\u4e00-\u9fff\u3005\u3006]/g);
-    return jpChars.length / text.length;
-  }})();
+    return (jpChars?.length ?? 0) / text.length;
+  }
+})();

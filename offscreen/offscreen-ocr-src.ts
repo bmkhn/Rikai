@@ -13,6 +13,8 @@ import {
   AutoImageProcessor,
   RawImage,
   env,
+  AutoTokenizer as TokenizerType,
+  AutoImageProcessor as ProcessorType,
 } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web";
 
@@ -24,7 +26,6 @@ const DECODER_REPO = "onnx-community/manga-ocr-base-ONNX";
 
 // Extension pages are not cross-origin isolated, so WASM threading is off.
 ort.env.wasm.numThreads = 1;
-// Load the ORT wasm binaries from the extension itself — no remote code.
 ort.env.wasm.wasmPaths = chrome.runtime.getURL("dist/");
 
 // Also configure Transformers.js to use our local wasm paths
@@ -33,47 +34,50 @@ env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL("dist/");
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+// ─── Types ──────────────────────────────────────────────────────────
+
+interface InitProgress {
+  percent?: number;
+  phase?: string;
+  file?: string;
+  downloading?: boolean;
+  loadedMB?: number;
+  totalMB?: number;
+  fromCache?: boolean;
+}
+
+interface ImageRef {
+  kind: "url" | "dataurl";
+  value: string;
+}
+
 // ─── State ──────────────────────────────────────────────────────────
 
-/** @type {import("@huggingface/transformers").AutoTokenizer | null} */
-let tokenizer = null;
-
-/** @type {import("@huggingface/transformers").AutoImageProcessor | null} */
-let imageProcessor = null;
-
-/** @type {ort.InferenceSession | null} */
-let encoderSession = null;
-
-/** @type {ort.InferenceSession | null} */
-let decoderSession = null;
-
+let tokenizer: TokenizerType | null = null;
+let imageProcessor: ProcessorType | null = null;
+let encoderSession: ort.InferenceSession | null = null;
+let decoderSession: ort.InferenceSession | null = null;
 let ready = false;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function baseUrl(repo, filename) {
+function baseUrl(repo: string, filename: string): string {
   return `https://huggingface.co/${repo}/resolve/main/${filename}`;
 }
 
 /**
  * Fetch an ONNX model file, then create an ORT InferenceSession from it.
  */
-async function loadOnnxSession(repo, filename, onProgress) {
+async function loadOnnxSession(
+  repo: string,
+  filename: string,
+  onProgress?: (p: { phase: string; file: string }) => void
+): Promise<ort.InferenceSession> {
   const url = baseUrl(repo, filename);
 
-  // Fetch with progress tracking
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch ${filename}: HTTP ${response.status}`);
-  }
-
-  const contentLength = Number(response.headers.get("content-length")) || 0;
-  if (contentLength > 0 && onProgress) {
-    onProgress({
-      phase: "download",
-      file: filename,
-      totalMB: Math.round(contentLength / 1048576),
-    });
   }
 
   const buffer = await response.arrayBuffer();
@@ -89,22 +93,26 @@ async function loadOnnxSession(repo, filename, onProgress) {
 
 // ─── Public API ─────────────────────────────────────────────────────
 
-window.RikaiMangaOcr = {
-  /**
-   * Load tokenizer, image processor, encoder, and decoder.
-   * @param {(p: {percent?: number, phase?: string, file?: string, downloading?: boolean, loadedMB?: number, totalMB?: number, fromCache?: boolean}) => void} [onProgress]
-   */
-  async init(onProgress = () => {}) {
+interface MangaOcrEngine {
+  init(onProgress?: (p: InitProgress) => void): Promise<boolean>;
+  isReady(): boolean;
+  recognize(imageDataUrl: string): Promise<string>;
+}
+
+(window as any).RikaiMangaOcr = {
+  async init(onProgress: (p: InitProgress) => void = () => {}): Promise<boolean> {
     if (ready) return true;
 
     const t0 = performance.now();
 
     // Load tokenizer + image processor from NorwayFish (has tokenizer.json)
     onProgress({ phase: "tokenizer", percent: 0 });
-    [tokenizer, imageProcessor] = await Promise.all([
-      AutoTokenizer.from_pretrained(TOKENIZER_REPO),
-      AutoImageProcessor.from_pretrained(TOKENIZER_REPO),
+    const [tok, proc] = await Promise.all([
+      AutoTokenizer.from_pretrained(TOKENIZER_REPO) as Promise<TokenizerType>,
+      AutoImageProcessor.from_pretrained(TOKENIZER_REPO) as Promise<ProcessorType>,
     ]);
+    tokenizer = tok;
+    imageProcessor = proc;
     onProgress({ phase: "tokenizer", percent: 100 });
 
     // Load encoder and decoder ONNX models in parallel
@@ -112,7 +120,7 @@ window.RikaiMangaOcr = {
     let filesDone = 0;
     const totalFiles = 2;
 
-    const trackProgress = (p) => {
+    const trackProgress = (p: { phase: string; file: string }) => {
       if (p.phase === "load") {
         filesDone++;
         onProgress({
@@ -131,7 +139,6 @@ window.RikaiMangaOcr = {
     encoderSession = enc;
     decoderSession = dec;
 
-    // Quick sanity: log input/output names
     console.log(
       "[Rikai OCR] Encoder inputs:",
       encoderSession.inputNames,
@@ -151,64 +158,52 @@ window.RikaiMangaOcr = {
     return true;
   },
 
-  isReady() {
+  isReady(): boolean {
     return ready;
   },
 
-  /**
-   * Recognize Japanese text in a single cropped region.
-   * @param {string} imageDataUrl - PNG data URL of the crop
-   * @returns {Promise<string>} recognized Japanese text
-   */
-  async recognize(imageDataUrl) {
+  async recognize(imageDataUrl: string): Promise<string> {
     if (!ready) throw new Error("Model not initialized. Call init() first.");
+    if (!tokenizer || !imageProcessor || !encoderSession || !decoderSession) {
+      throw new Error("Model components not loaded.");
+    }
 
     // 1. Process image through Transformers.js image processor
     const image = await RawImage.fromURL(imageDataUrl);
     const processed = await imageProcessor(image);
-    const pixel_values = processed.pixel_values;
+    const pixel_values = (processed as any).pixel_values;
 
     // 2. Run encoder
-    const encoderInput = {};
+    const encoderInput: Record<string, ort.Tensor> = {};
     for (const name of encoderSession.inputNames) {
       if (name === "pixel_values") {
-        // Convert Transformers.js Tensor to ORT Tensor
-        const data = pixel_values.data;
-        const dims = pixel_values.dims;
-        encoderInput[name] = new ort.Tensor("float32", Float32Array.from(data), dims);
+        const data = pixel_values.data as Float32Array;
+        const dims = pixel_values.dims as readonly number[];
+        encoderInput[name] = new ort.Tensor("float32", Float32Array.from(data), dims as number[]);
       }
     }
 
     const encoderOutput = await encoderSession.run(encoderInput);
-    const encoderKeyName = encoderSession.outputNames[0]; // typically "last_hidden_state"
+    const encoderKeyName = encoderSession.outputNames[0];
     const encoderHiddenStates = encoderOutput[encoderKeyName];
 
     // 3. Greedy autoregressive decode
     const maxNewTokens = 96;
+    const startTokenId = (tokenizer as any).bos_token_id ?? (tokenizer as any).cls_token_id ?? 2;
+    const eosTokenId = (tokenizer as any).eos_token_id ?? (tokenizer as any).sep_token_id ?? 3;
 
-    // Start token: decoder_start_token_id from config (2) or bos_token_id
-    const startTokenId =
-      tokenizer.bos_token_id ?? tokenizer.cls_token_id ?? 2;
-    const eosTokenId = tokenizer.eos_token_id ?? tokenizer.sep_token_id ?? 3;
-
-    /** @type {number[]} */
-    const generatedIds = [startTokenId];
+    const generatedIds: number[] = [startTokenId];
 
     for (let step = 0; step < maxNewTokens; step++) {
-      // Build decoder input tensors
       const inputIdsArray = new BigInt64Array(generatedIds.map((id) => BigInt(id)));
       const seqLen = generatedIds.length;
 
-      const decoderInput = {};
+      const decoderInput: Record<string, ort.Tensor> = {};
 
       for (const name of decoderSession.inputNames) {
         switch (name) {
           case "input_ids":
-            decoderInput[name] = new ort.Tensor(
-              "int64",
-              inputIdsArray,
-              [1, seqLen]
-            );
+            decoderInput[name] = new ort.Tensor("int64", inputIdsArray, [1, seqLen]);
             break;
           case "attention_mask":
             decoderInput[name] = new ort.Tensor(
@@ -236,11 +231,8 @@ window.RikaiMangaOcr = {
               [1, seqLen]
             );
             break;
-          // Skip optional inputs like past_key_values, use_cache_branch, etc.
           default:
-            // If the session requires it, try to provide a sensible default
             if (name.includes("past_key") || name === "use_cache_branch") {
-              // Skip — we don't use KV caching
               break;
             }
             console.warn(`[Rikai OCR] Unknown decoder input: ${name}`);
@@ -250,21 +242,17 @@ window.RikaiMangaOcr = {
 
       const decoderOutput = await decoderSession.run(decoderInput);
 
-      // Get logits for the last token position
-      const logitsKey = decoderSession.outputNames.find(
-        (n) => n === "logits"
-      ) ?? decoderSession.outputNames[0];
+      const logitsKey =
+        decoderSession.outputNames.find((n) => n === "logits") ??
+        decoderSession.outputNames[0];
       const logits = decoderOutput[logitsKey];
 
-      // logits shape: [1, seqLen, vocabSize]
       const vocabSize = logits.dims[logits.dims.length - 1];
-      const lastTokenOffset =
-        (seqLen - 1) * vocabSize; // offset to last token's logits
+      const lastTokenOffset = (seqLen - 1) * vocabSize;
 
-      // Argmax over vocab dimension for the last token
       let maxVal = -Infinity;
       let nextTokenId = 0;
-      const logitsData = logits.data;
+      const logitsData = logits.data as Float32Array;
       for (let v = 0; v < vocabSize; v++) {
         const val = logitsData[lastTokenOffset + v];
         if (val > maxVal) {
@@ -273,17 +261,14 @@ window.RikaiMangaOcr = {
         }
       }
 
-      // Stop at EOS
       if (nextTokenId === eosTokenId) break;
-
       generatedIds.push(nextTokenId);
     }
 
-    // 4. Decode token IDs to text
-    const text = tokenizer.decode(generatedIds, {
+    const text = (tokenizer as any).decode(generatedIds, {
       skip_special_tokens: true,
     });
 
     return text.trim();
   },
-};
+} satisfies MangaOcrEngine;

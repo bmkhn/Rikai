@@ -14,10 +14,10 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "dist/background.js"
   },
   "action": {
-    "default_popup": "popup/popup.html",
+    "default_popup": "dist/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -33,11 +33,11 @@
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": [
-        "content/image-extractor.js",
-        "content/ocr-pipeline.js",
-        "content/translator.js",
-        "content/overlay.js",
-        "content/content.js"
+        "dist/content/image-extractor.js",
+        "dist/content/ocr-pipeline.js",
+        "dist/content/translator.js",
+        "dist/content/overlay.js",
+        "dist/content/content.js"
       ],
       "run_at": "document_idle"
     }

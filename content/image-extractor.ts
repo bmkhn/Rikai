@@ -1,34 +1,22 @@
 // Rikai Image Extractor
 // Scans pages for manga/webtoon images, handles lazy-loading, dynamic content, and infinite scroll.
 
-/**
- * @typedef {Object} ImageRecord
- * @property {string} id            - Unique identifier for this image
- * @property {HTMLImageElement|HTMLDivElement} element - The DOM element
- * @property {string} src           - The resolved image URL
- * @property {number} width         - Display width in pixels
- * @property {number} height        - Display height in pixels
- * @property {DOMRect} rect         - Bounding rect on the page
- * @property {boolean} isLazy       - Whether this image was lazy-loaded
- * @property {boolean} isBackground - Whether this is a CSS background image
- * @property {string} source        - How it was found ("img" | "background" | "canvas" | "picture")
- */
+interface ImageRecord {
+  id: string;
+  element: HTMLElement;
+  src: string;
+  width: number;
+  height: number;
+  rect: DOMRect;
+  isLazy: boolean;
+  isBackground: boolean;
+  source: string;
+}
 
-/**
- * Minimum area (width × height) in pixels for an image to be considered manga content.
- * Filters out icons, buttons, avatars, etc.
- */
-const MIN_IMAGE_AREA = 50_000; // ~224×224
-
-/**
- * Minimum dimension in either axis.
- */
+const MIN_IMAGE_AREA = 50_000;
 const MIN_DIMENSION = 100;
 
-/**
- * Common URL patterns to skip (non-manga images).
- */
-const SKIP_URL_PATTERNS = [
+const SKIP_URL_PATTERNS: RegExp[] = [
   /gravatar\.com/i,
   /favicon/i,
   /logo\./i,
@@ -41,7 +29,7 @@ const SKIP_URL_PATTERNS = [
   /loading\.(gif|svg)/i,
   /pixel\.(gif|png)/i,
   /spacer\.(gif|png)/i,
-  /\.svg$/i, // Most SVGs are UI elements
+  /\.svg$/i,
   /1x1/i,
   /transparent/i,
   /ad[s]?[\./]/i,
@@ -50,10 +38,7 @@ const SKIP_URL_PATTERNS = [
   /analytics/i,
 ];
 
-/**
- * Common lazy-loading attribute names used by various libraries and CDNs.
- */
-const LAZY_ATTRS = [
+const LAZY_ATTRS: string[] = [
   "data-src",
   "data-lazy-src",
   "data-original",
@@ -68,8 +53,14 @@ const LAZY_ATTRS = [
 ];
 
 class ImageExtractor {
+  private _images: Map<string, ImageRecord>;
+  private _idCounter: number;
+  private _observer: MutationObserver | null;
+  private _intersectionObserver: IntersectionObserver | null;
+  private _scrollHandler: (() => void) | null;
+  private _active: boolean;
+
   constructor() {
-    /** @type {Map<string, ImageRecord>} */
     this._images = new Map();
     this._idCounter = 0;
     this._observer = null;
@@ -78,12 +69,7 @@ class ImageExtractor {
     this._active = false;
   }
 
-  /**
-   * Perform a synchronous scan of the current DOM.
-   * Returns all discovered ImageRecords.
-   * @returns {ImageRecord[]}
-   */
-  scan() {
+  scan(): ImageRecord[] {
     this._images.clear();
     this._idCounter = 0;
 
@@ -97,21 +83,16 @@ class ImageExtractor {
     return results;
   }
 
-  /**
-   * Start observing the DOM for dynamically added/changed images.
-   * Handles MutationObserver, IntersectionObserver (for lazy-load triggers), and scroll events.
-   */
-  observe() {
+  observe(): void {
     if (this._active) return;
     this._active = true;
 
-    // MutationObserver: watch for new/changed elements
     this._observer = new MutationObserver((mutations) => {
       let changed = false;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) {
-            this._processNewElement(node);
+            this._processNewElement(node as HTMLElement);
             changed = true;
           }
         }
@@ -137,23 +118,19 @@ class ImageExtractor {
       attributeFilter: ["src", "data-src", "data-lazy-src", "data-original", "loading", "style"],
     });
 
-    // IntersectionObserver: detect when off-screen images enter the viewport
-    // (triggers lazy-load scripts that replace placeholder URLs)
     this._intersectionObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            this._processNewElement(entry.target);
+            this._processNewElement(entry.target as HTMLElement);
           }
         }
       },
-      { rootMargin: "200px" } // trigger a bit before images are visible
+      { rootMargin: "200px" }
     );
 
-    // Observe all current and future images for intersection
     this._observeAllImages();
 
-    // Scroll handler: detect infinite scroll / load-more patterns
     this._scrollHandler = this._throttle(() => {
       this._checkForNewImages();
     }, 500);
@@ -163,10 +140,7 @@ class ImageExtractor {
     console.log("[Rikai] Image extractor: observation started.");
   }
 
-  /**
-   * Stop all observation and clean up.
-   */
-  disconnect() {
+  disconnect(): void {
     if (this._observer) {
       this._observer.disconnect();
       this._observer = null;
@@ -183,40 +157,25 @@ class ImageExtractor {
     console.log("[Rikai] Image extractor: observation stopped.");
   }
 
-  /**
-   * Get all currently tracked images.
-   * @returns {ImageRecord[]}
-   */
-  getImages() {
+  getImages(): ImageRecord[] {
     return Array.from(this._images.values());
   }
 
-  // ─── Private: Scanning ──────────────────────────────────────────────
-
-  /**
-   * Scan for <img> elements.
-   */
-  _scanImgElements() {
+  private _scanImgElements(): void {
     const imgs = document.querySelectorAll("img");
     for (const img of imgs) {
       this._addImageElement(img, "img");
     }
   }
 
-  /**
-   * Scan for <picture> elements with <source> children.
-   */
-  _scanPictureElements() {
+  private _scanPictureElements(): void {
     const pictures = document.querySelectorAll("picture");
     for (const picture of pictures) {
-      // Prefer the <img> inside the <picture>, fall back to the best <source>
       const img = picture.querySelector("img");
       if (img) {
         this._addImageElement(img, "picture");
         continue;
       }
-
-      // No <img> child — try to find the best source
       const sources = picture.querySelectorAll("source");
       const bestSource = this._pickBestSource(sources);
       if (bestSource) {
@@ -225,26 +184,18 @@ class ImageExtractor {
     }
   }
 
-  /**
-   * Scan for elements with CSS background images that look like manga panels.
-   */
-  _scanBackgroundImages() {
+  private _scanBackgroundImages(): void {
     const allElements = document.querySelectorAll(
       "div, section, figure, li, article, span, a"
     );
-
     for (const el of allElements) {
       const style = window.getComputedStyle(el);
       const bg = style.backgroundImage;
       if (!bg || bg === "none") continue;
-
-      // Extract URL from background-image: url("...")
       const urlMatch = bg.match(/url\(["']?(.*?)["']?\)/);
       if (!urlMatch) continue;
-
       const url = urlMatch[1];
       if (!url || url.startsWith("data:")) continue;
-
       const rect = el.getBoundingClientRect();
       if (this._isValidMangaImage(url, rect.width, rect.height)) {
         this._addBackgroundImage(el, url, "background");
@@ -252,41 +203,29 @@ class ImageExtractor {
     }
   }
 
-  /**
-   * Scan for visible <canvas> elements (some readers render to canvas).
-   */
-  _scanCanvasElements() {
+  private _scanCanvasElements(): void {
     const canvases = document.querySelectorAll("canvas");
     for (const canvas of canvases) {
       const rect = canvas.getBoundingClientRect();
       if (rect.width >= MIN_DIMENSION && rect.height >= MIN_DIMENSION) {
-        const url = canvas.toDataURL ? null : null; // Canvas doesn't have a URL
         this._addCanvasElement(canvas);
       }
     }
   }
 
-  // ─── Private: Element Processing ────────────────────────────────────
-
-  /**
-   * Process a newly added DOM element and its children for images.
-   */
-  _processNewElement(element) {
+  private _processNewElement(element: HTMLElement): void {
     if (!(element instanceof HTMLElement)) return;
 
-    // If this element is an img itself
     if (element instanceof HTMLImageElement) {
       this._addImageElement(element, "img");
       return;
     }
 
-    // Check for img descendants
     const imgs = element.querySelectorAll("img");
     for (const img of imgs) {
       this._addImageElement(img, "img");
     }
 
-    // Check for picture descendants
     const pictures = element.querySelectorAll("picture");
     for (const picture of pictures) {
       const img = picture.querySelector("img");
@@ -295,7 +234,6 @@ class ImageExtractor {
       }
     }
 
-    // Check for background images on this element and children
     const bgElements = element.querySelectorAll("div, section, figure, li, article");
     for (const el of [element, ...bgElements]) {
       const style = window.getComputedStyle(el);
@@ -308,18 +246,13 @@ class ImageExtractor {
       }
     }
 
-    // Check for canvas
     const canvases = element.querySelectorAll("canvas");
     for (const canvas of canvases) {
       this._addCanvasElement(canvas);
     }
   }
 
-  /**
-   * Add or update an <img> element to the tracking map.
-   */
-  _addImageElement(img, source) {
-    // Get the actual src, resolving lazy-loaded attributes
+  private _addImageElement(img: HTMLImageElement, source: string): void {
     const src = this._resolveImgSrc(img);
     if (!src) return;
 
@@ -327,15 +260,12 @@ class ImageExtractor {
     const isLazy = this._isLazyLoaded(img);
 
     if (!this._isValidMangaImage(src, rect.width, rect.height)) {
-      // Even if it's small now, it might be lazy-loaded with a placeholder
-      // Still track it if it has lazy attributes — it may load a full image
       if (!isLazy) return;
     }
 
     const id = this._makeId(img);
     if (this._images.has(id)) {
-      // Update existing record
-      const existing = this._images.get(id);
+      const existing = this._images.get(id)!;
       existing.src = src;
       existing.rect = img.getBoundingClientRect();
       existing.width = img.naturalWidth || img.width;
@@ -343,8 +273,7 @@ class ImageExtractor {
       return;
     }
 
-    /** @type {ImageRecord} */
-    const record = {
+    const record: ImageRecord = {
       id,
       element: img,
       src,
@@ -359,20 +288,16 @@ class ImageExtractor {
     this._images.set(id, record);
   }
 
-  /**
-   * Add a CSS background image to the tracking map.
-   */
-  _addBackgroundImage(element, url, source) {
+  private _addBackgroundImage(element: Element, url: string, source: string): void {
     const id = this._makeId(element);
     if (this._images.has(id)) return;
 
     const rect = element.getBoundingClientRect();
     if (!this._isValidMangaImage(url, rect.width, rect.height)) return;
 
-    /** @type {ImageRecord} */
-    const record = {
+    const record: ImageRecord = {
       id,
-      element,
+      element: element as HTMLElement,
       src: url,
       width: rect.width,
       height: rect.height,
@@ -385,17 +310,13 @@ class ImageExtractor {
     this._images.set(id, record);
   }
 
-  /**
-   * Add a <canvas> element to the tracking map.
-   */
-  _addCanvasElement(canvas) {
+  private _addCanvasElement(canvas: HTMLCanvasElement): void {
     const id = this._makeId(canvas);
     if (this._images.has(id)) return;
 
     const rect = canvas.getBoundingClientRect();
 
-    /** @type {ImageRecord} */
-    const record = {
+    const record: ImageRecord = {
       id,
       element: canvas,
       src: "[canvas]",
@@ -410,20 +331,12 @@ class ImageExtractor {
     this._images.set(id, record);
   }
 
-  // ─── Private: Lazy-Loading Resolution ───────────────────────────────
-
-  /**
-   * Resolve the actual image source from an <img> element,
-   * checking lazy-loading attributes if the current src is a placeholder.
-   */
-  _resolveImgSrc(img) {
-    // Check if current src is a real image or a placeholder
+  private _resolveImgSrc(img: HTMLImageElement): string | null {
     const currentSrc = img.currentSrc || img.src;
     if (currentSrc && !this._isPlaceholderSrc(currentSrc)) {
       return currentSrc;
     }
 
-    // Try lazy-loading attributes
     for (const attr of LAZY_ATTRS) {
       const val = img.getAttribute(attr);
       if (val && !this._isPlaceholderSrc(val)) {
@@ -431,16 +344,13 @@ class ImageExtractor {
       }
     }
 
-    // Try srcset — pick the largest candidate
     const srcset = img.getAttribute("srcset");
     if (srcset) {
       const best = this._pickBestSrcset(srcset);
       if (best) return best;
     }
 
-    // If current src is a data URI placeholder, skip it
     if (currentSrc && currentSrc.startsWith("data:")) {
-      // Check if there's a non-data-src in attributes
       for (const attr of LAZY_ATTRS) {
         const val = img.getAttribute(attr);
         if (val) return val;
@@ -451,48 +361,33 @@ class ImageExtractor {
     return currentSrc || null;
   }
 
-  /**
-   * Check if an <img> element is using lazy-loading.
-   */
-  _isLazyLoaded(img) {
-    // Native lazy loading
+  private _isLazyLoaded(img: HTMLImageElement): boolean {
     if (img.loading === "lazy") return true;
-
-    // Common lazy-loading attributes
     for (const attr of LAZY_ATTRS) {
       if (img.hasAttribute(attr)) return true;
     }
-
-    // Check for common lazy-loading classes
     const classes = img.className || "";
     if (/\b(lazy|lazyload|lazy-load|defer|placeholder)\b/i.test(classes)) {
       return true;
     }
-
     return false;
   }
 
-  /**
-   * Check if a src value looks like a placeholder (tiny image, data URI, etc.)
-   */
-  _isPlaceholderSrc(src) {
+  private _isPlaceholderSrc(src: string): boolean {
     if (!src) return true;
-    if (src.startsWith("data:image/gif;base64,R0lGOD")) return true; // common 1x1 gif
-    if (src.startsWith("data:image/svg")) return true; // SVG placeholder
+    if (src.startsWith("data:image/gif;base64,R0lGOD")) return true;
+    if (src.startsWith("data:image/svg")) return true;
     if (/placeholder/i.test(src)) return true;
     if (/blank\.(gif|png)/i.test(src)) return true;
     return false;
   }
 
-  /**
-   * Update a tracked image's src when its attributes change.
-   */
-  _updateImageSrc(img) {
+  private _updateImageSrc(img: HTMLImageElement): void {
     const id = this._makeId(img);
     const newSrc = this._resolveImgSrc(img);
 
     if (this._images.has(id)) {
-      const record = this._images.get(id);
+      const record = this._images.get(id)!;
       if (newSrc && newSrc !== record.src) {
         record.src = newSrc;
         record.rect = img.getBoundingClientRect();
@@ -504,32 +399,16 @@ class ImageExtractor {
     }
   }
 
-  // ─── Private: Validation ────────────────────────────────────────────
-
-  /**
-   * Check if an image URL and dimensions look like manga content.
-   */
-  _isValidMangaImage(url, width, height) {
-    // Skip if dimensions are too small
+  private _isValidMangaImage(url: string, width: number, height: number): boolean {
     if (width < MIN_DIMENSION || height < MIN_DIMENSION) return false;
-
-    // Skip if area is too small
     if (width * height < MIN_IMAGE_AREA) return false;
-
-    // Skip known non-manga URL patterns
     for (const pattern of SKIP_URL_PATTERNS) {
       if (pattern.test(url)) return false;
     }
-
     return true;
   }
 
-  // ─── Private: Source Selection ──────────────────────────────────────
-
-  /**
-   * Pick the best URL from a srcset string (largest width descriptor).
-   */
-  _pickBestSrcset(srcset) {
+  private _pickBestSrcset(srcset: string): string | null {
     const entries = srcset.split(",").map((entry) => {
       const parts = entry.trim().split(/\s+/);
       const url = parts[0];
@@ -540,7 +419,6 @@ class ImageExtractor {
 
     if (entries.length === 0) return null;
 
-    // Sort by value descending, prefer width descriptors
     entries.sort((a, b) => {
       if (a.isWidth !== b.isWidth) return a.isWidth ? -1 : 1;
       return b.value - a.value;
@@ -549,11 +427,8 @@ class ImageExtractor {
     return entries[0].url;
   }
 
-  /**
-   * Pick the best <source> element from a <picture>.
-   */
-  _pickBestSource(sources) {
-    let best = null;
+  private _pickBestSource(sources: NodeListOf<HTMLSourceElement>): HTMLSourceElement | null {
+    let best: HTMLSourceElement | null = null;
     let bestWidth = 0;
 
     for (const source of sources) {
@@ -567,14 +442,8 @@ class ImageExtractor {
     return best;
   }
 
-  // ─── Private: Observation Helpers ───────────────────────────────────
-
-  /**
-   * Set up IntersectionObserver on all tracked image elements.
-   */
-  _observeAllImages() {
+  private _observeAllImages(): void {
     if (!this._intersectionObserver) return;
-
     for (const record of this._images.values()) {
       if (record.element && record.element instanceof HTMLElement) {
         this._intersectionObserver.observe(record.element);
@@ -582,11 +451,7 @@ class ImageExtractor {
     }
   }
 
-  /**
-   * On scroll, check if new images have appeared (infinite scroll).
-   */
-  _checkForNewImages() {
-    // Quick scan: look for any new img elements not yet tracked
+  private _checkForNewImages(): void {
     const imgs = document.querySelectorAll("img");
     let newCount = 0;
 
@@ -598,7 +463,6 @@ class ImageExtractor {
       }
     }
 
-    // Also re-scan background images in newly visible areas
     this._scanBackgroundImages();
 
     if (newCount > 0) {
@@ -607,41 +471,31 @@ class ImageExtractor {
     }
   }
 
-  // ─── Private: Utilities ─────────────────────────────────────────────
-
-  /**
-   * Generate a stable ID for a DOM element.
-   */
-  _makeId(element) {
-    if (!element._rikaiId) {
-      element._rikaiId = `rikai-img-${this._idCounter++}`;
+  private _makeId(element: Element): string {
+    const el = element as any;
+    if (!el._rikaiId) {
+      el._rikaiId = `rikai-img-${this._idCounter++}`;
     }
-    return element._rikaiId;
+    return el._rikaiId;
   }
 
-  /**
-   * Simple throttle utility.
-   */
-  _throttle(fn, delay) {
+  private _throttle(fn: () => void, delay: number): () => void {
     let lastCall = 0;
-    let timer = null;
-    return function (...args) {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    return function (this: any) {
       const now = Date.now();
       if (now - lastCall >= delay) {
         lastCall = now;
-        fn.apply(this, args);
+        fn.apply(this);
       } else if (!timer) {
         timer = setTimeout(() => {
           lastCall = Date.now();
           timer = null;
-          fn.apply(this, args);
+          fn.apply(this);
         }, delay - (now - lastCall));
       }
     };
   }
 }
 
-// Export for use in content.js
-if (typeof window !== "undefined") {
-  window.RikaiImageExtractor = ImageExtractor;
-}
+(window as any).RikaiImageExtractor = ImageExtractor;
