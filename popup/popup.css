@@ -300,3 +300,133 @@ body {
   background: rgba(34, 211, 238, 0.12);
   box-shadow: var(--rikai-glow);
 }
+
+/* ─── Model management ─────────────────────────────────────────────── */
+
+.model-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--rikai-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.model-icon {
+  font-size: 11px;
+}
+
+.model-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--rikai-muted);
+}
+
+.model-label.ready {
+  color: var(--rikai-success);
+}
+
+.model-label.downloading {
+  color: var(--rikai-warning);
+}
+
+.model-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-progress .bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.model-progress .bar-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--rikai-accent), var(--rikai-accent-2));
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+  transition: width 200ms ease;
+}
+
+.model-progress .bar-fill.indeterminate {
+  width: 36%;
+  animation: sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0%   { left: -36%; }
+  100% { left: 100%; }
+}
+
+.model-progress-text {
+  font-size: 9px;
+  color: var(--rikai-muted);
+  text-align: center;
+}
+
+.model-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.model-btn {
+  flex: 1;
+  cursor: pointer;
+  padding: 7px 0;
+  background: transparent;
+  border: 1px solid var(--rikai-border-strong);
+  border-radius: 7px;
+  color: var(--rikai-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+
+.model-btn:hover {
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: var(--rikai-glow);
+}
+
+.model-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.model-btn:disabled:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-btn--danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--rikai-error);
+}
+
+.model-btn--danger:hover {
+  background: rgba(248, 113, 113, 0.12);
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.2);
+}
+
+.model-btn--warn {
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--rikai-warning);
+}
+
+.model-btn--warn:hover {
+  background: rgba(251, 191, 36, 0.12);
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.2);
+}

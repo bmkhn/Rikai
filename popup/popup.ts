@@ -8,9 +8,22 @@ const trStateEl = document.getElementById("tr-state") as HTMLElement;
 const detailEl = document.getElementById("detail") as HTMLElement;
 const retryBtn = document.getElementById("retry-btn") as HTMLElement;
 
+// Model management elements
+const modelIcon = document.getElementById("model-icon") as HTMLElement;
+const modelLabel = document.getElementById("model-label") as HTMLElement;
+const modelProgress = document.getElementById("model-progress") as HTMLElement;
+const modelBarFill = document.getElementById("model-bar-fill") as HTMLElement;
+const modelProgressText = document.getElementById("model-progress-text") as HTMLElement;
+const downloadBtn = document.getElementById("download-btn") as HTMLElement;
+const deleteBtn = document.getElementById("delete-btn") as HTMLElement;
+const repairBtn = document.getElementById("repair-btn") as HTMLElement;
+
 let currentTabId: number | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let progressPollTimer: ReturnType<typeof setInterval> | null = null;
 let lastPhase: string | null = null;
+let modelReady = false;
+let downloading = false;
 
 // ─── Init ──────────────────────────────────────────────────────────────
 
@@ -25,6 +38,41 @@ async function init(): Promise<void> {
     }
     currentTabId = tab.id ?? null;
 
+    // Check model status + download progress
+    const [modelStatus, progressResult] = await Promise.all([
+      chrome.runtime
+        .sendMessage({ type: "RIKAI_CHECK_MODEL_STATUS" })
+        .catch(() => ({ ready: false })),
+      chrome.storage.local.get("rikaiDownloadProgress") as Promise<Record<string, any>>,
+    ]);
+    modelReady = !!modelStatus.ready;
+
+    // Handle download progress state from storage
+    const progress = progressResult.rikaiDownloadProgress;
+    if (progress) {
+      if (progress.phase === "done" || progress.phase === "error") {
+        // Download completed or failed while popup was closed — clear stale state
+        chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
+        if (progress.phase === "done") modelReady = true;
+      } else if (progress.active && !modelReady) {
+        // Download was in progress — show progress UI and resume polling
+        downloading = true;
+        downloadBtn.setAttribute("hidden", "");
+        deleteBtn.setAttribute("hidden", "");
+        modelProgress.hidden = false;
+        modelBarFill.classList.remove("indeterminate");
+        modelBarFill.style.width = `${Math.max(0, Math.min(100, progress.percent || 0))}%`;
+        modelProgressText.textContent = progress.detail || `${progress.percent || 0}%`;
+        modelLabel.textContent = "DOWNLOADING";
+        modelLabel.className = "model-label downloading";
+        modelIcon.textContent = "↓";
+        startProgressPolling();
+      }
+    }
+
+    updateModelUI();
+
+    // Check tab state
     const bgState = await chrome.runtime
       .sendMessage({ type: "RIKAI_GET_TAB_STATE" })
       .catch(() => ({ state: "OFF" }));
@@ -43,7 +91,16 @@ retryBtn.addEventListener("click", () => {
   sendToTab(currentTabId, { type: "RIKAI_ACTIVATE" });
 });
 
+downloadBtn.addEventListener("click", onDownload);
+deleteBtn.addEventListener("click", onDelete);
+repairBtn.addEventListener("click", onRepair);
+
 async function onToggle(): Promise<void> {
+  if (!modelReady) {
+    powerToggle.checked = false;
+    return;
+  }
+
   const turnOn = powerToggle.checked;
   const type = turnOn ? "RIKAI_ACTIVATE" : "RIKAI_DEACTIVATE";
 
@@ -62,6 +119,143 @@ async function onToggle(): Promise<void> {
   }
   refreshFromTab();
 }
+
+async function onDownload(): Promise<void> {
+  if (downloading) return;
+  downloading = true;
+
+  downloadBtn.setAttribute("hidden", "");
+  deleteBtn.setAttribute("hidden", "");
+  modelProgress.hidden = false;
+  modelBarFill.style.width = "";
+  modelBarFill.classList.add("indeterminate");
+  modelLabel.textContent = "DOWNLOADING";
+  modelLabel.className = "model-label downloading";
+  modelIcon.textContent = "↓";
+  modelProgressText.textContent = "Starting…";
+
+  // Persist download state so it survives popup close
+  chrome.storage.local
+    .set({ rikaiDownloadProgress: { active: true, phase: "download", percent: 0, detail: "Starting…" } })
+    .catch(() => {});
+
+  // Start polling progress from storage
+  startProgressPolling();
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RIKAI_DOWNLOAD_MODEL" });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Download failed");
+    }
+    modelReady = true;
+  } catch (err: any) {
+    showError("Download failed", err?.message || "Check your connection.");
+    modelReady = false;
+  } finally {
+    downloading = false;
+    stopProgressPolling();
+    updateModelUI();
+  }
+}
+
+async function onDelete(): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({ type: "RIKAI_DELETE_MODEL" });
+    modelReady = false;
+    powerToggle.checked = false;
+    updateModelUI();
+  } catch (err: any) {
+    showError("Delete failed", err?.message || "Unknown error.");
+  }
+}
+
+async function onRepair(): Promise<void> {
+  if (downloading) return;
+
+  try {
+    // Step 1: Delete everything
+    await chrome.runtime.sendMessage({ type: "RIKAI_DELETE_MODEL" });
+    modelReady = false;
+    updateModelUI();
+
+    // Step 2: Re-download
+    await onDownload();
+  } catch (err: any) {
+    showError("Repair failed", err?.message || "Unknown error.");
+    updateModelUI();
+  }
+}
+
+function updateModelUI(): void {
+  if (downloading) {
+    // Already showing progress, don't overwrite
+    return;
+  }
+
+  if (modelReady) {
+    modelIcon.textContent = "✓";
+    modelLabel.textContent = "MODEL READY";
+    modelLabel.className = "model-label ready";
+    modelProgress.hidden = true;
+    downloadBtn.removeAttribute("hidden");
+    downloadBtn.textContent = "RE-DOWNLOAD";
+    deleteBtn.removeAttribute("hidden");
+    // Clear stale progress from previous session
+    chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
+    repairBtn.setAttribute("hidden", "");
+    powerToggle.disabled = false;
+  } else {
+    modelIcon.textContent = "—";
+    modelLabel.textContent = "MODEL NOT DOWNLOADED";
+    modelLabel.className = "model-label";
+    modelProgress.hidden = true;
+    downloadBtn.removeAttribute("hidden");
+    downloadBtn.textContent = "DOWNLOAD";
+    deleteBtn.setAttribute("hidden", "");
+    repairBtn.removeAttribute("hidden");
+    powerToggle.disabled = true;
+    powerToggle.checked = false;
+  }
+}
+
+// ─── Progress polling ──────────────────────────────────────────────────
+
+function startProgressPolling(): void {
+  stopProgressPolling();
+  progressPollTimer = setInterval(pollDownloadProgress, 500);
+}
+
+function stopProgressPolling(): void {
+  if (progressPollTimer != null) {
+    clearInterval(progressPollTimer);
+    progressPollTimer = null;
+  }
+}
+
+async function pollDownloadProgress(): Promise<void> {
+  try {
+    const result: Record<string, any> = await chrome.storage.local.get("rikaiDownloadProgress");
+    const progress = result.rikaiDownloadProgress as { active: boolean; phase: string; percent: number; detail: string } | undefined;
+    if (!progress) return;
+
+    if (progress.active) {
+      modelBarFill.classList.remove("indeterminate");
+      modelBarFill.style.width = `${Math.max(0, Math.min(100, progress.percent))}%`;
+      modelProgressText.textContent = progress.detail || `${progress.percent}%`;
+    } else if (progress.phase === "done") {
+      modelBarFill.style.width = "100%";
+      modelProgressText.textContent = "Complete";
+    } else if (progress.phase === "error") {
+      modelBarFill.classList.remove("indeterminate");
+      modelBarFill.style.width = "0%";
+      modelProgressText.textContent = `Failed: ${progress.detail || "unknown error"}`;
+    }
+  } catch {
+    // Storage access failed, ignore
+  }
+}
+
+// ─── Messaging ─────────────────────────────────────────────────────────
 
 function sendToTab(tabId: number | null, message: any): Promise<any> {
   if (typeof tabId !== "number") {
@@ -102,6 +296,7 @@ async function refreshFromTab(): Promise<void> {
 }
 
 function syncToggle(phase: string): void {
+  if (!modelReady) return;
   const shouldBeOn = phase !== "OFF" && phase !== "UNSUPPORTED";
   if (powerToggle.checked !== shouldBeOn) {
     powerToggle.checked = shouldBeOn;

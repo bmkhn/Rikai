@@ -68,10 +68,25 @@ function baseUrl(repo: string, filename: string): string {
 /**
  * Fetch an ONNX model file, then create an ORT InferenceSession from it.
  */
+function writeDownloadProgress(
+  active: boolean,
+  phase: string,
+  percent: number,
+  detail?: string
+): void {
+  try {
+    chrome.storage?.local?.set({
+      rikaiDownloadProgress: { active, phase, percent, detail: detail || "" },
+    });
+  } catch {
+    // storage may not be available in offscreen context
+  }
+}
+
 async function loadOnnxSession(
   repo: string,
   filename: string,
-  onProgress?: (p: { phase: string; file: string }) => void
+  onProgress?: (p: { phase: string; file: string; percent?: number }) => void
 ): Promise<ort.InferenceSession> {
   const url = baseUrl(repo, filename);
 
@@ -80,7 +95,36 @@ async function loadOnnxSession(
     throw new Error(`Failed to fetch ${filename}: HTTP ${response.status}`);
   }
 
-  const buffer = await response.arrayBuffer();
+  // Track download progress via Content-Length + ReadableStream
+  const contentLength = Number(response.headers.get("content-length")) || 0;
+  const reader = response.body?.getReader();
+  let loaded = 0;
+
+  let buffer: ArrayBuffer;
+  if (reader && contentLength > 0) {
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.byteLength;
+      const percent = Math.round((loaded / contentLength) * 100);
+      if (onProgress) {
+        onProgress({ phase: "download", file: filename, percent });
+      }
+    }
+    // Combine chunks into single buffer
+    const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+    const merged = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    buffer = merged.buffer;
+  } else {
+    buffer = await response.arrayBuffer();
+  }
 
   if (onProgress) {
     onProgress({ phase: "load", file: filename });
@@ -105,7 +149,9 @@ interface MangaOcrEngine {
 
     const t0 = performance.now();
 
+    try {
     // Load tokenizer + image processor from NorwayFish (has tokenizer.json)
+    writeDownloadProgress(true, "tokenizer", 0, "Loading tokenizer");
     onProgress({ phase: "tokenizer", percent: 0 });
     const [tok, proc] = await Promise.all([
       AutoTokenizer.from_pretrained(TOKENIZER_REPO) as Promise<TokenizerType>,
@@ -113,6 +159,7 @@ interface MangaOcrEngine {
     ]);
     tokenizer = tok;
     imageProcessor = proc;
+    writeDownloadProgress(true, "download", 0, "Downloading models");
     onProgress({ phase: "tokenizer", percent: 100 });
 
     // Load encoder and decoder ONNX models in parallel
@@ -120,12 +167,23 @@ interface MangaOcrEngine {
     let filesDone = 0;
     const totalFiles = 2;
 
-    const trackProgress = (p: { phase: string; file: string }) => {
+    const trackProgress = (p: { phase: string; file: string; percent?: number }) => {
+      // Write per-file progress to storage for popup polling
+      const fileLabel = p.file?.includes("encoder") ? "Encoder" : "Decoder";
+      if (p.phase === "download" && typeof p.percent === "number") {
+        // Each file is ~50% of total; combine with files already done
+        const base = (filesDone / totalFiles) * 100;
+        const share = (1 / totalFiles) * p.percent;
+        const total = Math.round(base + share);
+        writeDownloadProgress(true, "download", total, `${fileLabel} ${p.percent}%`);
+      }
       if (p.phase === "load") {
         filesDone++;
+        const total = Math.round((filesDone / totalFiles) * 100);
+        writeDownloadProgress(true, "load", total, `Loading ${fileLabel}`);
         onProgress({
           phase: "model-load",
-          percent: Math.round((filesDone / totalFiles) * 100),
+          percent: total,
           file: p.file,
         });
       }
@@ -153,9 +211,16 @@ interface MangaOcrEngine {
     );
 
     ready = true;
+    // Note: readiness flag is set by the background service worker
+    // (offscreen document cannot access chrome.storage)
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
     console.log(`[Rikai OCR] Init complete in ${elapsed}s`);
     return true;
+
+    } catch (err) {
+      writeDownloadProgress(false, "error", 0, String((err as Error)?.message || err));
+      throw err;
+    }
   },
 
   isReady(): boolean {

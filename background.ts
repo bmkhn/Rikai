@@ -35,6 +35,23 @@ chrome.runtime.onMessage.addListener(
   ) => {
     if (!message || typeof message !== "object") return undefined;
 
+    // Progress broadcast from offscreen document → write to storage for popup polling
+    if (message.source === "rikai-offscreen" && message.type === "PROGRESS") {
+      try {
+        chrome.storage?.local?.set({
+          rikaiDownloadProgress: {
+            active: message.phase !== "done" && message.phase !== "error",
+            phase: message.phase || "download",
+            percent: typeof message.percent === "number" ? message.percent : 0,
+            detail: message.detail || message.file || "",
+          },
+        });
+      } catch {
+        // storage unavailable
+      }
+      return false;
+    }
+
     if (message.target === "rikai-bg" && message.type === "STATE_UPDATE") {
       const tabId = sender.tab?.id;
       if (typeof tabId === "number") {
@@ -62,6 +79,18 @@ chrome.runtime.onMessage.addListener(
           .catch((err: Error) =>
             sendResponse({ ok: false, error: String(err) })
           );
+        return true;
+
+      case "RIKAI_CHECK_MODEL_STATUS":
+        handleCheckModelStatus(sendResponse);
+        return true;
+
+      case "RIKAI_DELETE_MODEL":
+        handleDeleteModel(sendResponse);
+        return true;
+
+      case "RIKAI_DOWNLOAD_MODEL":
+        handleDownloadModel(sendResponse);
         return true;
 
       default:
@@ -120,6 +149,80 @@ async function ensureOffscreenDocument(): Promise<void> {
       })
       .catch(() => {});
   }, 3000);
+}
+
+// ─── Model Management ───────────────────────────────────────────────
+
+async function handleCheckModelStatus(
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get("rikaiModelReady");
+    sendResponse({ ready: !!result.rikaiModelReady });
+  } catch (err) {
+    sendResponse({ ready: false });
+  }
+}
+
+async function handleDeleteModel(
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  try {
+    // Clear all Cache Storage entries (model weights live here)
+    const names = await caches.keys();
+    await Promise.all(names.map((n) => caches.delete(n)));
+    // Remove readiness flag and progress
+    await chrome.storage.local.remove(["rikaiModelReady", "rikaiDownloadProgress"]);
+    sendResponse({ ok: true });
+  } catch (err) {
+    sendResponse({ ok: false, error: String(err) });
+  }
+}
+
+async function handleDownloadModel(
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  try {
+    await ensureOffscreenDocument();
+    // The offscreen document's INIT handler will download the model.
+    // Progress is written to chrome.storage.local by the OCR engine.
+    // We just need to trigger INIT and wait for it to complete.
+    chrome.runtime
+      .sendMessage({
+        target: "rikai-offscreen",
+        type: "INIT",
+        requestId: 0,
+        payload: {},
+      })
+      .then((response: any) => {
+        // Write completion state to storage so popup sees it on reopen
+        const progress = response?.type === "READY"
+          ? { active: false, phase: "done", percent: 100, detail: "" }
+          : { active: false, phase: "error", percent: 0, detail: response?.error || "Failed" };
+        try {
+          chrome.storage?.local?.set({
+            rikaiModelReady: response?.type === "READY",
+            rikaiDownloadProgress: progress,
+          });
+        } catch { /* storage unavailable */ }
+
+        if (response?.type === "READY") {
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false, error: response?.error || "Download failed" });
+        }
+      })
+      .catch((err: Error) => {
+        try {
+          chrome.storage?.local?.set({
+            rikaiDownloadProgress: { active: false, phase: "error", percent: 0, detail: String(err) },
+          });
+        } catch { /* storage unavailable */ }
+        sendResponse({ ok: false, error: String(err) });
+      });
+  } catch (err) {
+    sendResponse({ ok: false, error: String(err) });
+  }
 }
 
 // ─── Tab Cleanup ─────────────────────────────────────────────────────

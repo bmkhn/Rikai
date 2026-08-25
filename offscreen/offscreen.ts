@@ -103,9 +103,12 @@ interface ImageRef {
       if (!(window as any).RikaiMangaOcr) {
         throw new Error("MangaOCR bundle not loaded.");
       }
-      await (window as any).RikaiMangaOcr.init((p: any) =>
-        respond(sendResponse, null, { type: "PROGRESS", phase: "model-load", ...p })
-      );
+      await (window as any).RikaiMangaOcr.init((p: any) => {
+        // Broadcast progress so background can write to storage for popup polling
+        chrome.runtime
+          .sendMessage({ source: SOURCE, type: "PROGRESS", ...p })
+          .catch(() => {});
+      });
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
       console.log(`[Rikai OCR] Model ready in ${elapsed}s`);
       respond(sendResponse, requestId, { type: "READY" });

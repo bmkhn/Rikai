@@ -14,6 +14,23 @@
       <div class="brand-sub">TRANSLATION SYSTEM</div>
     </header>
 
+    <!-- Model management (above toggle) -->
+    <section id="model-section" class="model-section">
+      <div id="model-status" class="model-status">
+        <span id="model-icon" class="model-icon">—</span>
+        <span id="model-label" class="model-label">Checking model…</span>
+      </div>
+      <div id="model-progress" class="model-progress" hidden>
+        <div class="bar"><div id="model-bar-fill" class="bar-fill"></div></div>
+        <span id="model-progress-text" class="model-progress-text"></span>
+      </div>
+      <div id="model-actions" class="model-actions">
+        <button id="download-btn" class="model-btn" hidden>DOWNLOAD</button>
+        <button id="delete-btn" class="model-btn model-btn--danger" hidden>DELETE</button>
+        <button id="repair-btn" class="model-btn model-btn--warn" hidden>REPAIR</button>
+      </div>
+    </section>
+
     <!-- Master switch -->
     <section class="switch-row" aria-label="Translator power">
       <span class="switch-label">TRANSLATOR</span>
