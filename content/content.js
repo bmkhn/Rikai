@@ -1,435 +1,377 @@
-// Rikai content script
-// Receives messages from the popup and orchestrates extraction, OCR, translation, and overlay.
+// Rikai Content Script — Translator Engine
+//
+// Owns the active state of the translator on this tab. The popup merely
+// sends ACTIVATE/DEACTIVATE messages; once activated, Rikai keeps running
+// here regardless of whether the popup stays open.
+//
+// Pipeline per manga image:
+//   scan → visibility prioritization → [OCR engine: detect regions +
+//   recognize Japanese] → translate ja→en → in-page overlay panels
+//
+// States reported to the background worker (mirrored for the popup):
+//   OFF | LOADING | READY | PROCESSING | ERROR
 
 (() => {
   "use strict";
 
-  // ─── State ──────────────────────────────────────────────────────────
+  if (window.__rikaiContentLoaded) return;
+  window.__rikaiContentLoaded = true;
 
-  const state = {
-    translationActive: false,
-    /** @type {string} Selected language: "jpn", "kor", or "both" */
-    lang: "jpn",
-    /** @type {import('./image-extractor').ImageRecord[]} */
-    extractedImages: [],
-    /** @type {import('./ocr').OcrResult[]} */
-    ocrResults: [],
-    /** @type {import('./translator').BatchTranslationResult[]} */
-    translations: [],
-    /** @type {Set<string>} IDs of images that have been OCR'd */
-    processedImageIds: new Set(),
-  };
+  // ─── Modules ─────────────────────────────────────────────────────────
 
-  // ─── Module Instances ───────────────────────────────────────────────
-
-  /** @type {import('./image-extractor')} */
   const extractor = new window.RikaiImageExtractor();
-
-  /** @type {import('./ocr').OcrEngine} */
-  const ocrEngine = new window.RikaiOcrEngine();
-
-  /** @type {import('./translator').Translator} */
+  const ocr = new window.RikaiMangaOcrClient();
+  const ocrCache = new window.RikaiOcrCache();
+  const queue = new window.RikaiOcrQueue();
   const translator = new window.RikaiTranslator();
-
-  /** @type {import('./overlay').Overlay} */
   const overlay = new window.RikaiOverlay();
 
-  // ─── Message Listener ───────────────────────────────────────────────
+  // ─── State ───────────────────────────────────────────────────────────
+
+  const state = {
+    phase: "OFF", // OFF | LOADING | READY | PROCESSING | ERROR
+    detail: "",
+  };
+
+  /** @type {Set<string>} cache keys currently known */
+  const seenImages = new Set();
+
+  let watchIntervalId = null;
+  let currentUrl = location.href;
+
+  // ─── Messaging from popup ────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    switch (message.action) {
-      case "translatePage":
-        handleTranslatePage(message, sendResponse);
-        return true;
+    switch (message?.type) {
+      case "RIKAI_ACTIVATE":
+        activate().catch((err) => {
+          console.error("[Rikai] Activation failed:", err);
+          setError("ACTIVATION FAILED", String(err?.message || err));
+        });
+        sendResponse({ ok: true });
+        return false;
 
-      case "toggleTranslation":
-        handleToggleTranslation(sendResponse);
-        return true;
+      case "RIKAI_DEACTIVATE":
+        deactivate();
+        sendResponse({ ok: true });
+        return false;
 
-      case "scanImages":
-        handleScanImages(sendResponse);
-        return true;
-
-      case "getExtractedImages":
-        handleGetExtractedImages(sendResponse);
-        return true;
-
-      case "processOcr":
-        handleProcessOcr(message, sendResponse);
-        return true;
-
-      case "getOcrResults":
-        handleGetOcrResults(sendResponse);
-        return true;
-
-      case "processTranslation":
-        handleProcessTranslation(message, sendResponse);
-        return true;
-
-      case "getTranslations":
-        handleGetTranslations(sendResponse);
-        return true;
+      case "RIKAI_GET_STATUS":
+        sendResponse({ state: state.phase, detail: state.detail });
+        return false;
 
       default:
-        sendResponse({ success: false, message: `Unknown action: ${message.action}` });
+        return undefined;
     }
   });
 
-  // ─── Handlers ───────────────────────────────────────────────────────
+  function setPhase(phase, detail = "") {
+    state.phase = phase;
+    state.detail = detail;
+    // Mirror state so a reopened popup shows reality
+    chrome.runtime
+      .sendMessage({
+        target: "rikai-bg",
+        type: "STATE_UPDATE",
+        state: phase,
+        detail,
+      })
+      .catch(() => {});
+  }
 
-  /**
-   * Handle the "translatePage" command.
-   * Full pipeline: scan images → OCR → translate → render overlay.
-   */
-  async function handleTranslatePage(message, sendResponse) {
-    console.log("[Rikai] Received 'translatePage' command.");
+  function setError(title, detail) {
+    setPhase("ERROR", detail);
+    overlay.setStatus({
+      tone: "error",
+      title,
+      detail,
+      onRetry: () => {
+        overlay.hideStatus();
+        activate().catch((err) =>
+          setError("ACTIVATION FAILED", String(err?.message || err))
+        );
+      },
+    });
+  }
 
-    // Store language selection
-    state.lang = message.lang || "jpn";
-    console.log(`[Rikai] Language: ${state.lang}`);
+  // ─── Activation lifecycle ────────────────────────────────────────────
+
+  async function activate() {
+    if (state.phase === "LOADING" || state.phase === "READY" || state.phase === "PROCESSING") {
+      return; // already active
+    }
+
+    console.log("[Rikai] Activating…");
+
+    overlay.activate();
+    setPhase("LOADING");
+    overlay.setStatus({
+      tone: "loading",
+      title: "LOADING OCR ENGINE",
+      detail: "Japanese MangaOCR",
+      indeterminate: true,
+    });
 
     try {
-      // Step 1: Scan for images
-      state.extractedImages = extractor.scan();
-      extractor.observe();
-
-      const imgCount = state.extractedImages.length;
-      console.log(`[Rikai] Found ${imgCount} images.`);
-
-      if (imgCount === 0) {
-        sendResponse({
-          success: true,
-          message: "No manga images found on this page.",
-          images: [],
-          ocrResults: [],
-          translations: [],
-        });
-        return;
-      }
-
-      // Step 2: Process OCR on all discovered images
-      // Pass DOM elements (not URLs) so we can draw them to canvas and bypass CORS
-      console.log("[Rikai] Starting OCR processing...");
-      const imagesToProcess = state.extractedImages
-        .filter((img) => img.element && img.element instanceof HTMLElement)
-        .map((img) => ({
-          id: img.id,
-          element: img.element,
-        }));
-
-      state.ocrResults = await ocrEngine.recognizeImages(
-        imagesToProcess,
-        state.lang,
-        (done, total) => {
-          console.log(`[Rikai] OCR progress: ${done}/${total}`);
+      // Lazy model load — streams real download progress when available
+      await ocr.initialize((p) => {
+        if (p.phase === "warmup") {
+          overlay.setStatus({
+            tone: "loading",
+            title: "CALIBRATING ENGINE",
+            detail: "Preparing the recognizer — one moment",
+            indeterminate: true,
+          });
+          return;
         }
-      );
-
-      // Track which images have been processed
-      for (const result of state.ocrResults) {
-        state.processedImageIds.add(result.imageId);
-      }
-
-      const totalRegions = state.ocrResults.reduce((sum, r) => sum + r.regions.length, 0);
-      console.log(`[Rikai] OCR complete: ${totalRegions} text regions found.`);
-
-      // Step 3: Translate all detected text
-      if (totalRegions > 0) {
-        console.log("[Rikai] Starting translation...");
-        state.translations = await translator.translateOcrResults(
-          state.ocrResults,
-          (done, total) => {
-            console.log(`[Rikai] Translation progress: ${done}/${total}`);
-          }
-        );
-
-        const successfulTranslations = state.translations.filter((t) => t.translation.success);
-        console.log(
-          `[Rikai] Translation complete: ${successfulTranslations.length}/${state.translations.length} successful.`
-        );
-
-        // Step 4: Render overlays
-        if (successfulTranslations.length > 0) {
-          console.log("[Rikai] Rendering translation overlays...");
-          overlay.render(
-            state.translations,
-            state.extractedImages,
-            state.ocrResults
-          );
-          state.translationActive = true;
+        if (p.downloading) {
+          // First run only: real bytes, real percentage, honest expectations
+          overlay.setStatus({
+            tone: "loading",
+            title: "FIRST-TIME SETUP",
+            detail:
+              `Downloading Japanese OCR model · ${p.loadedMB} / ${p.totalMB} MB · ` +
+              `this happens once, then it's cached`,
+            percent: p.percent,
+          });
+        } else if (p.percent != null && !p.fromCache) {
+          overlay.setStatus({
+            tone: "loading",
+            title: "LOADING OCR ENGINE",
+            detail: "Japanese MangaOCR",
+            percent: p.percent,
+          });
         }
-      } else {
-        state.translations = [];
-        console.log("[Rikai] No text regions to translate.");
-      }
-
-      // Build summary
-      const ocrTime = state.ocrResults.reduce((sum, r) => sum + r.processingTime, 0);
-      const overlayCount = overlay.isVisible() ? state.translations.filter((t) => t.translation.success).length : 0;
-      const summary = `${imgCount} images, ${totalRegions} text regions, ${state.translations.length} translations, ${overlayCount} overlays`;
-
-      sendResponse({
-        success: true,
-        message: summary,
-        images: state.extractedImages.map((img) => ({
-          id: img.id,
-          src: img.src,
-          width: img.width,
-          height: img.height,
-          source: img.source,
-        })),
-        ocrResults: state.ocrResults.map((r) => ({
-          imageId: r.imageId,
-          regionCount: r.regions.length,
-          regions: r.regions,
-          lang: r.imageLang,
-        })),
-        translations: state.translations.map((t) => ({
-          imageId: t.imageId,
-          regionIndex: t.regionIndex,
-          original: t.translation.originalText,
-          translated: t.translation.translatedText,
-          success: t.translation.success,
-          confidence: t.translation.confidence,
-        })),
+        // fromCache / no-progress → keep the indeterminate panel as-is
       });
+
+      setPhase("READY");
+      overlay.setStatus({ tone: "success", title: "SYSTEM READY" });
+      setTimeout(() => {
+        if (state.phase !== "ERROR") overlay.hideStatus();
+      }, 1200);
+
+      startPipeline();
     } catch (err) {
-      console.error("[Rikai] Translation pipeline failed:", err);
-      sendResponse({
-        success: false,
-        message: `Error: ${err.message}`,
-      });
+      console.error("[Rikai] OCR init failed:", err);
+      setError("OCR INITIALIZATION FAILED", "Unable to load the Japanese OCR model.");
     }
   }
 
-  /**
-   * Handle "toggleTranslation" — show/hide translation overlay.
-   * Does NOT re-run OCR or translation — just toggles visibility.
-   */
-  function handleToggleTranslation(sendResponse) {
-    const isVisible = overlay.toggle();
-    state.translationActive = isVisible;
-
-    console.log(`[Rikai] Translation toggled: ${isVisible ? "ON" : "OFF"}`);
-
-    sendResponse({
-      success: true,
-      message: `Translation ${isVisible ? "enabled" : "disabled"}.`,
-      active: isVisible,
-    });
-  }
-
-  /**
-   * Handle "scanImages" — re-scan without OCR.
-   */
-  function handleScanImages(sendResponse) {
-    console.log("[Rikai] Received 'scanImages' command.");
-    state.extractedImages = extractor.scan();
-
-    sendResponse({
-      success: true,
-      message: `Found ${state.extractedImages.length} images.`,
-      images: state.extractedImages.map((img) => ({
-        id: img.id,
-        src: img.src,
-        width: img.width,
-        height: img.height,
-        source: img.source,
-        isLazy: img.isLazy,
-        isBackground: img.isBackground,
-      })),
-    });
-  }
-
-  /**
-   * Handle "getExtractedImages" — return currently tracked images.
-   */
-  function handleGetExtractedImages(sendResponse) {
-    const images = extractor.getImages();
-    sendResponse({
-      success: true,
-      images: images.map((img) => ({
-        id: img.id,
-        src: img.src,
-        width: img.width,
-        height: img.height,
-        source: img.source,
-        isLazy: img.isLazy,
-        isBackground: img.isBackground,
-      })),
-    });
-  }
-
-  /**
-   * Handle "processOcr" — run OCR on specific images or re-process all.
-   */
-  async function handleProcessOcr(message, sendResponse) {
-    console.log("[Rikai] Received 'processOcr' command.");
-
-    try {
-      const imageIds = message.imageIds;
-
-      let imagesToProcess;
-      if (imageIds && imageIds.length > 0) {
-        imagesToProcess = state.extractedImages
-          .filter((img) => imageIds.includes(img.id) && img.element instanceof HTMLElement)
-          .map((img) => ({ id: img.id, element: img.element }));
-      } else {
-        imagesToProcess = state.extractedImages
-          .filter((img) => !state.processedImageIds.has(img.id) && img.element instanceof HTMLElement)
-          .map((img) => ({ id: img.id, element: img.element }));
-      }
-
-      if (imagesToProcess.length === 0) {
-        sendResponse({
-          success: true,
-          message: "No new images to process.",
-          ocrResults: [],
-        });
-        return;
-      }
-
-      const results = await ocrEngine.recognizeImages(imagesToProcess);
-
-      // Update state
-      for (const result of results) {
-        state.processedImageIds.add(result.imageId);
-        const existingIdx = state.ocrResults.findIndex((r) => r.imageId === result.imageId);
-        if (existingIdx >= 0) {
-          state.ocrResults[existingIdx] = result;
-        } else {
-          state.ocrResults.push(result);
-        }
-      }
-
-      sendResponse({
-        success: true,
-        message: `Processed ${results.length} images.`,
-        ocrResults: results.map((r) => ({
-          imageId: r.imageId,
-          regionCount: r.regions.length,
-          regions: r.regions,
-          lang: r.imageLang,
-        })),
-      });
-    } catch (err) {
-      console.error("[Rikai] OCR processing failed:", err);
-      sendResponse({
-        success: false,
-        message: `Error: ${err.message}`,
-      });
-    }
-  }
-
-  /**
-   * Handle "getOcrResults" — return cached OCR results.
-   */
-  function handleGetOcrResults(sendResponse) {
-    sendResponse({
-      success: true,
-      ocrResults: state.ocrResults.map((r) => ({
-        imageId: r.imageId,
-        regionCount: r.regions.length,
-        regions: r.regions,
-        lang: r.imageLang,
-      })),
-    });
-  }
-
-  /**
-   * Handle "processTranslation" — translate OCR results (re-translate or specific regions).
-   */
-  async function handleProcessTranslation(message, sendResponse) {
-    console.log("[Rikai] Received 'processTranslation' command.");
-
-    try {
-      const imageIds = message.imageIds;
-
-      let ocrResultsToTranslate;
-      if (imageIds && imageIds.length > 0) {
-        ocrResultsToTranslate = state.ocrResults.filter((r) =>
-          imageIds.includes(r.imageId)
-        );
-      } else {
-        ocrResultsToTranslate = state.ocrResults;
-      }
-
-      if (ocrResultsToTranslate.length === 0) {
-        sendResponse({
-          success: true,
-          message: "No OCR results to translate.",
-          translations: [],
-        });
-        return;
-      }
-
-      const translations = await translator.translateOcrResults(ocrResultsToTranslate);
-
-      // Update state
-      for (const t of translations) {
-        const existingIdx = state.translations.findIndex(
-          (existing) =>
-            existing.imageId === t.imageId && existing.regionIndex === t.regionIndex
-        );
-        if (existingIdx >= 0) {
-          state.translations[existingIdx] = t;
-        } else {
-          state.translations.push(t);
-        }
-      }
-
-      // Re-render overlays with updated translations
-      const successfulTranslations = state.translations.filter((t) => t.translation.success);
-      if (successfulTranslations.length > 0) {
-        overlay.render(state.translations, state.extractedImages, state.ocrResults);
-        state.translationActive = true;
-      }
-
-      sendResponse({
-        success: true,
-        message: `Translated ${translations.length} text regions.`,
-        translations: translations.map((t) => ({
-          imageId: t.imageId,
-          regionIndex: t.regionIndex,
-          original: t.translation.originalText,
-          translated: t.translation.translatedText,
-          success: t.translation.success,
-          confidence: t.translation.confidence,
-        })),
-      });
-    } catch (err) {
-      console.error("[Rikai] Translation processing failed:", err);
-      sendResponse({
-        success: false,
-        message: `Error: ${err.message}`,
-      });
-    }
-  }
-
-  /**
-   * Handle "getTranslations" — return cached translations.
-   */
-  function handleGetTranslations(sendResponse) {
-    sendResponse({
-      success: true,
-      translations: state.translations.map((t) => ({
-        imageId: t.imageId,
-        regionIndex: t.regionIndex,
-        original: t.translation.originalText,
-        translated: t.translation.translatedText,
-        success: t.translation.success,
-        confidence: t.translation.confidence,
-      })),
-    });
-  }
-
-  // ─── Cleanup ────────────────────────────────────────────────────────
-
-  // Clean up overlays when the page unloads
-  window.addEventListener("beforeunload", () => {
+  function deactivate() {
+    console.log("[Rikai] Deactivating.");
+    queue.cancel();
+    stopWatching();
+    extractor.disconnect();
     overlay.clear();
-    ocrEngine.terminate();
+    overlay.deactivate();
+    overlay.hideStatus();
+    seenImages.clear();
+    setPhase("OFF");
+  }
+
+  // ─── Processing pipeline ─────────────────────────────────────────────
+
+  function startPipeline() {
+    // Initial scan
+    const records = extractor.scan();
+    extractor.observe();
+
+    enqueueVisible(records);
+
+    // Watch for new/lazy-loaded images, reader navigation and SPA changes
+    watchIntervalId = setInterval(() => {
+      if (state.phase === "ERROR") return;
+
+      // SPA / reader navigation: reset per-page tracking, keep the model and
+      // URL-keyed cache so nothing is recognized twice.
+      if (location.href !== currentUrl) {
+        console.log("[Rikai] Navigation detected — rescanning.");
+        currentUrl = location.href;
+        seenImages.clear();
+        overlay.prune();
+      }
+
+      overlay.prune();
+      enqueueVisible(extractor.getImages());
+    }, 1500);
+  }
+
+  function stopWatching() {
+    if (watchIntervalId != null) {
+      clearInterval(watchIntervalId);
+      watchIntervalId = null;
+    }
+  }
+
+  /**
+   * Enqueue not-yet-processed images that are near or inside the viewport.
+   * Visible pages get top priority; offscreen ones are skipped until they
+   * approach (the interval watcher will pick them up later).
+   */
+  function enqueueVisible(records) {
+    const vh = window.innerHeight;
+    let enqueuedAny = false;
+
+    for (const record of records) {
+      if (!(record.element instanceof HTMLElement)) continue;
+      if (!record.element.isConnected) continue;
+
+      const key = ocrCache.key(record);
+      if (seenImages.has(key)) continue;
+      if (ocrCache.getRegions(key)) continue;
+
+      const rect = record.element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+
+      // Skip anything more than one viewport away
+      const distance =
+        rect.top > vh ? rect.top - vh : rect.bottom < 0 ? -rect.bottom : 0;
+      if (distance > vh) continue;
+
+      seenImages.add(key);
+      const priority = distance === 0 ? 0 : Math.round(distance);
+      enqueuedAny =
+        queue.push(key, priority, () => processImageRecord(record, key)) ||
+        enqueuedAny;
+    }
+
+    if (enqueuedAny && state.phase !== "PROCESSING") {
+      setPhase("PROCESSING");
+    }
+  }
+
+  /**
+   * Full pipeline for one manga image.
+   */
+  async function processImageRecord(record, key) {
+    const element = record.element;
+    if (!element.isConnected || state.phase === "ERROR") return;
+
+    try {
+      overlay.setStatus({
+        tone: "loading",
+        title: "DETECTING TEXT",
+        detail: "Scanning manga page",
+        indeterminate: true,
+      });
+
+      // Cache hit?
+      let regions = ocrCache.getRegions(key);
+
+      if (!regions) {
+        const imageRef = await buildImageRef(record);
+        if (!imageRef) return;
+
+        regions = await ocr.processImage(imageRef);
+        ocrCache.setRegions(key, regions);
+      }
+
+      // Translate each region and render panels incrementally
+      let translatedCount = 0;
+
+      for (let i = 0; i < regions.length; i++) {
+        const region = regions[i];
+        const boxKey = `${region.box.x},${region.box.y},${region.box.width},${region.box.height}`;
+
+        let english;
+        const cached = ocrCache.getTranslation(key, boxKey);
+        if (cached) {
+          english = cached.translation;
+        } else {
+          overlay.setStatus({
+            tone: "loading",
+            title: "TRANSLATING",
+            detail: "Japanese → English",
+            indeterminate: true,
+          });
+
+          const result = await translator.translateJapanese(region.japanese);
+          english = result.translation;
+          ocrCache.setTranslation(key, boxKey, {
+            japanese: region.japanese,
+            translation: english,
+          });
+        }
+
+        if (!english || !element.isConnected) continue;
+
+        overlay.addPanel(`${key}#${i}`, element, region.box, english);
+        translatedCount++;
+      }
+
+      console.log(
+        `[Rikai] ${key}: ${regions.length} region(s) detected, ${translatedCount} translated.`
+      );
+    } catch (err) {
+      console.warn(`[Rikai] Failed to process an image:`, err);
+    } finally {
+      if (queue.pendingCount === 0 && state.phase === "PROCESSING") {
+        setPhase("READY");
+        overlay.setStatus({ tone: "success", title: "TRANSLATION COMPLETE" });
+        setTimeout(() => {
+          if (state.phase === "READY") overlay.hideStatus();
+        }, 1400);
+      }
+    }
+  }
+
+  /**
+   * Build an OCR-engine image reference for a record.
+   * - data: URLs pass through directly
+   * - blob:/same-origin sources are fetched here into data URLs
+   * - http(s) URLs are fetched by the offscreen document (extension permissions)
+   */
+  async function buildImageRef(record) {
+    const src = record.src || "";
+
+    if (src.startsWith("data:")) {
+      return { kind: "dataurl", value: src };
+    }
+
+    if (src.startsWith("blob:") || isSameOrigin(src)) {
+      try {
+        const response = await fetch(src);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        const dataUrl = await blobToDataUrl(blob);
+        return { kind: "dataurl", value: dataUrl };
+      } catch (err) {
+        console.warn("[Rikai] Local fetch failed, falling back to URL:", err);
+      }
+    }
+
+    if (/^https?:\/\//i.test(src)) {
+      return { kind: "url", value: src };
+    }
+
+    return null;
+  }
+
+  function isSameOrigin(url) {
+    try {
+      return new URL(url, location.href).origin === location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("Failed to read image."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // ─── Page teardown ───────────────────────────────────────────────────
+
+  window.addEventListener("beforeunload", () => {
+    queue.cancel();
+    stopWatching();
+    overlay.deactivate();
   });
 
-  console.log("[Rikai] Content script loaded.");
+  console.log("[Rikai] Content script loaded — waiting for activation.");
 })();

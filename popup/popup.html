@@ -7,39 +7,53 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="popup-container">
-    <h1 class="title">Rikai</h1>
-    <p class="subtitle">Translate manga &amp; webtoons on the page</p>
+  <div class="frame">
+    <!-- Brand -->
+    <header class="brand">
+      <div class="brand-mark">RIKAI</div>
+      <div class="brand-sub">TRANSLATION SYSTEM</div>
+    </header>
 
-    <div class="lang-selector">
-      <label class="lang-option">
-        <input type="radio" name="lang" value="jpn" checked>
-        <span class="lang-chip">🇯🇵 Japanese</span>
+    <!-- Master switch -->
+    <section class="switch-row" aria-label="Translator power">
+      <span class="switch-label">TRANSLATOR</span>
+      <label class="switch">
+        <input type="checkbox" id="power-toggle">
+        <span class="track"><span class="knob"></span></span>
       </label>
-      <label class="lang-option">
-        <input type="radio" name="lang" value="kor">
-        <span class="lang-chip">🇰🇷 Korean</span>
-      </label>
-      <label class="lang-option">
-        <input type="radio" name="lang" value="both">
-        <span class="lang-chip">Both</span>
-      </label>
-    </div>
+    </section>
 
-    <button id="translate-btn" class="btn btn-primary">Translate Page</button>
+    <!-- Main status readout -->
+    <section id="status-core" class="status-core" data-tone="off">
+      <span class="status-dot"></span>
+      <span id="status-main" class="status-main">OFFLINE</span>
+    </section>
 
-    <div id="toggle-container" class="toggle-container" hidden>
-      <span class="toggle-label">Translations</span>
-      <label class="toggle-switch">
-        <input type="checkbox" id="toggle-checkbox" checked>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
+    <div class="divider"></div>
 
-    <div id="status" class="status" hidden>
-      <span id="status-icon"></span>
-      <span id="status-text"></span>
-    </div>
+    <!-- Language route -->
+    <section class="route">
+      <span class="route-lang">日本語</span>
+      <span class="route-arrow"></span>
+      <span class="route-lang">ENGLISH</span>
+    </section>
+
+    <!-- Engine rows -->
+    <section class="rows">
+      <div class="row">
+        <span class="row-label">OCR ENGINE</span>
+        <span id="ocr-state" class="row-value">—</span>
+      </div>
+      <div class="row">
+        <span class="row-label">TRANSLATION</span>
+        <span id="tr-state" class="row-value">READY</span>
+      </div>
+    </section>
+
+    <!-- Detail / error line -->
+    <p id="detail" class="detail" hidden></p>
+
+    <button id="retry-btn" class="retry-btn" hidden>RETRY</button>
   </div>
 
   <script src="popup.js"></script>

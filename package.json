@@ -1,14 +1,18 @@
 {
   "name": "rikai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Chrome extension to translate raw manga and webtoons directly on the page",
+  "description": "Chrome extension to translate raw manga directly on the page",
+  "type": "commonjs",
   "scripts": {
-    "setup-ocr": "node scripts/setup-ocr.js",
     "build": "node scripts/build.js",
+    "build:watch": "node scripts/build.js --watch",
     "generate-icons": "node scripts/generate-icons.js"
   },
+  "dependencies": {
+    "@huggingface/transformers": "^3.7.6"
+  },
   "devDependencies": {
-    "tesseract.js": "^5.1.1"
+    "esbuild": "^0.25.10"
   }
 }

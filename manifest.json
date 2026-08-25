@@ -1,12 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Rikai",
-  "version": "0.1.0",
-  "description": "Translate raw manga and webtoons directly on the page where you read them.",
+  "version": "0.2.0",
+  "description": "Japanese manga OCR + translation, rendered directly on the page.",
+  "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage",
+    "offscreen"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -22,11 +31,10 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["http://*/*", "https://*/*"],
       "js": [
-        "lib/tesseract/tesseract.min.js",
         "content/image-extractor.js",
-        "content/ocr.js",
+        "content/ocr-pipeline.js",
         "content/translator.js",
         "content/overlay.js",
         "content/content.js"
@@ -34,15 +42,7 @@
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "lib/tesseract/tesseract.min.js",
-        "lib/tesseract/worker.min.js",
-        "lib/tesseract/traineddata/jpn.traineddata",
-        "lib/tesseract/traineddata/kor.traineddata"
-      ],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
 }

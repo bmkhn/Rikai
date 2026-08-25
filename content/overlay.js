@@ -1,273 +1,488 @@
-// Rikai Overlay Module
-// Renders translation overlays: masks original text and displays English translations.
+// Rikai Overlay Module — OverlayRenderer
+//
+// All in-page Rikai UI lives inside a single fixed-position root element with
+// a Shadow DOM, so website CSS can never bleed in and vice versa:
+//
+//   <div class="rikai-root" style="position:fixed;inset:0;z-index:...">
+//     └── #shadow-root
+//         ├── status panel    (loading / detecting / translating / ready)
+//         ├── error panel     (with RETRY)
+//         └── translation panels (ONE per detected text region)
+//
+// Translation panels contain ONLY the translated text — no invented system
+// labels, icons or decorations. They are pointer-events:none so reading,
+// scrolling and clicking keep working everywhere.
+//
+// Coordinates: OCR boxes are in original-image space; every animation frame
+// where something changed they are remapped through getBoundingClientRect()
+// onto viewport coordinates, so scrolling, resizing and browser zoom all stay
+// aligned without any hardcoded scaling.
 
-/**
- * @typedef {Object} OverlayConfig
- * @property {string} maskColor        - Color for masking original text
- * @property {number} maskOpacity      - Opacity of the mask (0-1)
- * @property {string} textColor        - Color of translated text
- * @property {number} fontSize         - Base font size in pixels
- * @property {string} fontFamily       - Font family for translated text
- * @property {string} backgroundColor  - Background behind translated text
- * @property {number} padding          - Padding around text in pixels
- * @property {number} maxWidth         - Max width of text bubble
- * @property {string} zIndex           - CSS z-index for overlays
- */
+(() => {
+  "use strict";
 
-const DEFAULT_CONFIG = {
-  maskColor: "#ffffff",
-  maskOpacity: 0.95,
-  textColor: "#1a1a1a",
-  fontSize: 14,
-  fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  backgroundColor: "#ffffffee",
-  padding: 4,
-  maxWidth: 200,
-  zIndex: "2147483647", // Max z-index to stay on top
-  borderRadius: 3,
-  shadow: "0 1px 3px rgba(0,0,0,0.3)",
-};
+  // ─── Design tokens (shared visual language of the Rikai system) ──────
+  // Mirrored 1:1 in popup/popup.css — keep both in sync.
+  const TOKENS = `
+    --rikai-bg:            #070b16;
+    --rikai-panel:         rgba(11, 17, 32, 0.92);
+    --rikai-panel-soft:    rgba(13, 20, 38, 0.78);
+    --rikai-border:        rgba(94, 234, 212, 0.28);
+    --rikai-border-strong: rgba(34, 211, 238, 0.55);
+    --rikai-accent:        #22d3ee;
+    --rikai-accent-2:      #818cf8;
+    --rikai-text:          #e6edf7;
+    --rikai-muted:         #7c89a6;
+    --rikai-success:       #34d399;
+    --rikai-warning:       #fbbf24;
+    --rikai-error:         #f87171;
+    --rikai-glow:          0 0 12px rgba(34, 211, 238, 0.22), 0 0 32px rgba(129, 140, 248, 0.10);
+    --rikai-shadow:        0 10px 32px rgba(2, 6, 16, 0.55);
+  `;
 
-/**
- * CSS class prefix for Rikai overlay elements.
- */
-const CLASS_PREFIX = "rikai-overlay";
+  const STYLES = `
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-class Overlay {
-  /**
-   * @param {OverlayConfig} [config]
-   */
-  constructor(config = {}) {
-    this._config = { ...DEFAULT_CONFIG, ...config };
+    :host { all: initial; }
 
-    /** @type {HTMLElement[]} All created overlay elements */
-    this._overlays = [];
-
-    /** @type {HTMLElement|null} Container element */
-    this._container = null;
-
-    /** @type {boolean} Whether overlays are currently visible */
-    this._visible = false;
-
-    /** @type {CSSStyleSheet|null} Injected stylesheet */
-    this._styleSheet = null;
-  }
-
-  /**
-   * Render translation overlays for all translated regions.
-   * @param {Array<{ imageId: string, regionIndex: number, translation: { originalText: string, translatedText: string, success: boolean } }>} translations
-   * @param {Array<{ id: string, element: HTMLElement, rect: DOMRect, width: number, height: number }>} images
-   * @param {Array<{ imageId: string, regions: Array<{ bbox: { x: number, y: number, width: number, height: number } }> }>} ocrResults
-   */
-  render(translations, images, ocrResults) {
-    this.clear();
-
-    // Create container for all overlays
-    this._container = document.createElement("div");
-    this._container.className = `${CLASS_PREFIX}-container`;
-    this._container.setAttribute("data-rikai", "true");
-    document.body.appendChild(this._container);
-
-    // Inject styles
-    this._injectStyles();
-
-    // Build a lookup: imageId -> image record
-    const imageMap = new Map();
-    for (const img of images) {
-      imageMap.set(img.id, img);
+    .root {
+      ${TOKENS}
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000;
+      pointer-events: none;
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
     }
 
-    // Build a lookup: imageId -> OCR regions
-    const ocrMap = new Map();
-    for (const ocr of ocrResults) {
-      ocrMap.set(ocr.imageId, ocr.regions);
+    /* ─── Translation panels ─────────────────────────────────────────── */
+    .panel {
+      position: absolute;
+      max-width: 360px;
+      padding: 8px 12px;
+      background: linear-gradient(160deg, var(--rikai-panel), var(--rikai-panel-soft));
+      border: 1px solid var(--rikai-border);
+      border-radius: 8px;
+      color: var(--rikai-text);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      box-shadow: var(--rikai-shadow), var(--rikai-glow);
+      overflow-wrap: break-word;
+      line-height: 1.35;
+      letter-spacing: 0.01em;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 180ms ease, transform 180ms ease;
+      will-change: left, top, width;
+    }
+    .panel.visible {
+      opacity: 1;
+      transform: translateY(0);
     }
 
-    // Render each translation
-    for (const t of translations) {
-      if (!t.translation.success || !t.translation.translatedText) continue;
-
-      const image = imageMap.get(t.imageId);
-      const ocrRegions = ocrMap.get(t.imageId);
-      if (!image || !ocrRegions) continue;
-
-      const region = ocrRegions[t.regionIndex];
-      if (!region) continue;
-
-      this._renderRegion(image, region.bbox, t.translation);
+    /* ─── Status panel ───────────────────────────────────────────────── */
+    .status {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 230px;
+      max-width: 320px;
+      background: linear-gradient(160deg, var(--rikai-panel), var(--rikai-panel-soft));
+      border: 1px solid var(--rikai-border-strong);
+      border-radius: 10px;
+      box-shadow: var(--rikai-shadow), var(--rikai-glow);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 12px 16px 14px;
+      color: var(--rikai-text);
+      transition: opacity 220ms ease, transform 220ms ease;
+    }
+    .status.hidden {
+      opacity: 0;
+      transform: translate(-50%, -8px);
+      visibility: hidden;
+    }
+    .status-brand {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .brand-mark {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.42em;
+      color: var(--rikai-accent);
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 9px;
+      letter-spacing: 0.24em;
+      color: var(--rikai-muted);
+      text-transform: uppercase;
+    }
+    .status-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .status-detail {
+      font-size: 11px;
+      color: var(--rikai-muted);
+      line-height: 1.45;
+    }
+    .bar {
+      position: relative;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      margin-top: 9px;
+    }
+    .bar-fill {
+      position: absolute;
+      inset: 0;
+      width: 0%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, var(--rikai-accent), var(--rikai-accent-2));
+      box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+      transition: width 200ms ease;
+    }
+    .bar-fill.indeterminate {
+      width: 36%;
+      animation: rikai-sweep 1.15s ease-in-out infinite;
+    }
+    @keyframes rikai-sweep {
+      0%   { left: -36%; }
+      100% { left: 100%; }
     }
 
-    this._visible = true;
-    console.log(`[Rikai] Overlay: Rendered ${this._overlays.length} translation overlays.`);
-  }
+    /* Status colour variants */
+    .status[data-tone="error"]   .status-title { color: var(--rikai-error); }
+    .status[data-tone="error"]   { border-color: rgba(248, 113, 113, 0.5); }
+    .status[data-tone="success"] .status-title { color: var(--rikai-success); }
+    .status[data-tone="loading"] .status-title { color: var(--rikai-warning); }
 
-  /**
-   * Show all overlays.
-   */
-  show() {
-    if (this._container) {
-      this._container.style.display = "";
-      this._visible = true;
+    /* ─── Retry button (the ONLY interactive element) ────────────────── */
+    .retry-btn {
+      pointer-events: auto;
+      cursor: pointer;
+      margin-top: 10px;
+      padding: 6px 18px;
+      float: right;
+      background: transparent;
+      border: 1px solid var(--rikai-border-strong);
+      border-radius: 6px;
+      color: var(--rikai-accent);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      transition: background 150ms ease, box-shadow 150ms ease;
     }
-  }
+    .retry-btn:hover {
+      background: rgba(34, 211, 238, 0.12);
+      box-shadow: var(--rikai-glow);
+    }
+  `;
 
-  /**
-   * Hide all overlays without removing them.
-   */
-  hide() {
-    if (this._container) {
-      this._container.style.display = "none";
+  const VIEWPORT_MARGIN = 8;
+
+  class OverlayRenderer {
+    constructor() {
+      /** @type {HTMLElement|null} */
+      this._root = null;
+      /** @type {ShadowRoot|null} */
+      this._shadow = null;
+      /** @type {Map<string, { el: HTMLElement, img: HTMLImageElement, box: object, naturalW: number, naturalH: number }>} */
+      this._bindings = new Map();
+      this._rafId = null;
+      this._dirty = true;
+      this._resizeObserver = null;
+      this._intervalId = null;
+      this._listeners = [];
       this._visible = false;
     }
-  }
 
-  /**
-   * Toggle overlay visibility.
-   * @returns {boolean} New visibility state
-   */
-  toggle() {
-    if (this._visible) {
-      this.hide();
-    } else {
-      this.show();
-    }
-    return this._visible;
-  }
-
-  /**
-   * Get current visibility state.
-   */
-  isVisible() {
-    return this._visible;
-  }
-
-  /**
-   * Remove all overlay elements from the DOM.
-   */
-  clear() {
-    for (const overlay of this._overlays) {
-      overlay.remove();
-    }
-    this._overlays = [];
-
-    if (this._container) {
-      this._container.remove();
-      this._container = null;
+    get isActive() {
+      return this._root !== null;
     }
 
-    this._visible = false;
+    // ─── Lifecycle ─────────────────────────────────────────────────────
+
+    /** Create the root + shadow DOM and start tracking. */
+    activate() {
+      if (this._root) return;
+
+      const root = document.createElement("div");
+      root.id = "rikai-overlay-root";
+      root.style.position = "fixed";
+      root.style.inset = "0";
+      root.style.zIndex = "2147483000";
+      root.style.pointerEvents = "none";
+      document.documentElement.appendChild(root);
+
+      const shadow = root.attachShadow({ mode: "closed" });
+      const style = document.createElement("style");
+      style.textContent = STYLES;
+      shadow.appendChild(style);
+
+      const layer = document.createElement("div");
+      layer.className = "root";
+      shadow.appendChild(layer);
+
+      this._root = root;
+      this._shadow = shadow;
+      this._layer = layer;
+      this._visible = true;
+
+      this._startTracking();
+    }
+
+    /** Remove everything and stop tracking. */
+    deactivate() {
+      if (this._rafId != null) cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+      if (this._intervalId != null) clearInterval(this._intervalId);
+      this._intervalId = null;
+
+      for (const [target, type, fn] of this._listeners) {
+        target.removeEventListener(type, fn);
+      }
+      this._listeners = [];
+
+      if (this._resizeObserver) {
+        this._resizeObserver.disconnect();
+        this._resizeObserver = null;
+      }
+
+      this._bindings.clear();
+      if (this._root) {
+        this._root.remove();
+        this._root = null;
+        this._shadow = null;
+        this._layer = null;
+      }
+      this._hideStatusInternal();
+      this._visible = false;
+    }
+
+    setPanelsVisible(visible) {
+      this._visible = visible;
+      if (!this._layer) return;
+      for (const binding of this._bindings.values()) {
+        binding.el.classList.toggle("visible", visible);
+      }
+    }
+
+    get isVisible() {
+      return this._visible;
+    }
+
+    // ─── Translation panels ─────────────────────────────────────────────
+
+    /**
+     * Add (or replace) a translation panel bound to an image region.
+     * @param {string} regionId unique per image+region
+     * @param {HTMLImageElement} imgElement
+     * @param {{ x, y, width, height }} box box in original image space
+     * @param {string} translation English text to show
+     */
+    addPanel(regionId, imgElement, box, translation) {
+      if (!this._layer || !translation) return;
+
+      let binding = this._bindings.get(regionId);
+      if (!binding) {
+        const el = document.createElement("div");
+        el.className = "panel";
+        this._layer.appendChild(el);
+        binding = { el };
+        this._bindings.set(regionId, binding);
+
+        if (this._resizeObserver && imgElement instanceof Element) {
+          this._resizeObserver.observe(imgElement);
+        }
+      }
+
+      binding.img = imgElement;
+      binding.box = box;
+      binding.naturalW = imgElement.naturalWidth || imgElement.width;
+      binding.naturalH = imgElement.naturalHeight || imgElement.height;
+
+      binding.el.textContent = translation;
+      this._dirty = true;
+    }
+
+    /** Drop panels whose image is gone from the DOM. */
+    prune() {
+      for (const [id, binding] of this._bindings) {
+        if (!binding.img || !binding.img.isConnected) {
+          binding.el.remove();
+          this._bindings.delete(id);
+        }
+      }
+    }
+
+    clear() {
+      for (const binding of this._bindings.values()) binding.el.remove();
+      this._bindings.clear();
+    }
+
+    // ─── Status / error UI ──────────────────────────────────────────────
+
+    /**
+     * Show the system-style status panel.
+     * @param {{ tone?: "loading"|"info"|"success"|"error", title: string,
+     *           detail?: string, percent?: number|null, indeterminate?: boolean,
+     *           onRetry?: () => void }} opts
+     */
+    setStatus(opts) {
+      if (!this._layer) return;
+
+      if (!this._statusEl) {
+        this._statusEl = document.createElement("div");
+        this._statusEl.className = "status";
+        this._statusEl.innerHTML = `
+          <div class="status-brand">
+            <span class="brand-mark">Rikai</span>
+            <span class="brand-sub">Translation System</span>
+          </div>
+          <div class="status-title"></div>
+          <div class="status-detail" hidden></div>
+          <div class="bar"><div class="bar-fill"></div></div>
+          <button class="retry-btn" hidden>RETRY</button>
+        `;
+        this._layer.appendChild(this._statusEl);
+        this._retryBtn = this._statusEl.querySelector(".retry-btn");
+      }
+
+      const s = this._statusEl;
+      s.dataset.tone = opts.tone || "info";
+      s.querySelector(".status-title").textContent = opts.title || "";
+      s.querySelector(".brand-mark").textContent = "RIKAI";
+      s.querySelector(".brand-mark").style.color =
+        s.dataset.tone === "error" ? "var(--rikai-error)" : "";
+
+      const detail = s.querySelector(".status-detail");
+      if (opts.detail) {
+        detail.hidden = false;
+        detail.textContent = opts.detail;
+      } else {
+        detail.hidden = true;
+      }
+
+      const fill = s.querySelector(".bar-fill");
+      if (s.dataset.tone === "error") {
+        s.querySelector(".bar").hidden = true;
+      } else {
+        s.querySelector(".bar").hidden = false;
+        if (opts.indeterminate || typeof opts.percent !== "number") {
+          fill.classList.add("indeterminate");
+          fill.style.width = "";
+        } else {
+          fill.classList.remove("indeterminate");
+          fill.style.width = `${Math.max(0, Math.min(100, opts.percent))}%`;
+        }
+      }
+
+      // Retry button — shown only when a handler is provided
+      if (!this._retryBtn) return;
+      this._retryBtn.hidden = !opts.onRetry;
+      this._onRetry = opts.onRetry || null;
+      this._retryBtn.onclick = () => this._onRetry?.();
+
+      s.classList.remove("hidden");
+    }
+
+    hideStatus() {
+      this._hideStatusInternal();
+    }
+
+    _hideStatusInternal() {
+      this._statusEl?.classList.add("hidden");
+    }
+
+    // ─── Coordinate tracking ────────────────────────────────────────────
+
+    _startTracking() {
+      const markDirty = () => { this._dirty = true; };
+
+      const onScroll = () => markDirty();
+      const onResize = () => markDirty();
+
+      window.addEventListener("scroll", onScroll, { passive: true });
+      window.addEventListener("resize", onResize, { passive: true });
+      this._listeners.push(
+        [window, "scroll", onScroll],
+        [window, "resize", onResize]
+      );
+
+      this._resizeObserver = new ResizeObserver(markDirty);
+
+      // Light periodic poll catches reader-layout changes that neither event
+      // nor ResizeObserver reports (e.g. transforms). It only marks dirty.
+      this._intervalId = setInterval(markDirty, 800);
+
+      const tick = () => {
+        if (this._dirty) {
+          this._dirty = false;
+          this._updatePositions();
+        }
+        this._rafId = requestAnimationFrame(tick);
+      };
+      this._rafId = requestAnimationFrame(tick);
+    }
+
+    _updatePositions() {
+      if (!this._layer) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      for (const binding of this._bindings.values()) {
+        const { el, img, box } = binding;
+        if (!img.isConnected) continue;
+
+        // Current displayed geometry of the manga image
+        const rect = img.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        const naturalW = binding.naturalW || img.naturalWidth || 1;
+        const naturalH = binding.naturalH || img.naturalHeight || 1;
+        const scaleX = rect.width / naturalW;
+        const scaleY = rect.height / naturalH;
+
+        // Box → viewport space (root is fixed, so no scroll offset needed)
+        const bx = rect.left + box.x * scaleX;
+        const by = rect.top + box.y * scaleY;
+        const bw = Math.max(box.width * scaleX, 40);
+
+        // Size the panel to its content but biased toward the bubble width
+        const targetWidth = Math.min(
+          Math.max(bw + 24, 90),
+          360,
+          vw - VIEWPORT_MARGIN * 2
+        );
+        el.style.width = `${Math.round(targetWidth)}px`;
+        el.style.maxHeight = `${Math.round(Math.max(vh - VIEWPORT_MARGIN * 2, 60))}px`;
+
+        const panelRect = el.getBoundingClientRect();
+        let px = bx + bw / 2 - panelRect.width / 2;
+        let py = by - panelRect.height - 6;
+
+        // Prefer above the bubble; fall back to below; then clamp to viewport
+        if (py < VIEWPORT_MARGIN) py = by + box.height * scaleY + 6;
+        px = Math.max(VIEWPORT_MARGIN, Math.min(px, vw - panelRect.width - VIEWPORT_MARGIN));
+        py = Math.max(VIEWPORT_MARGIN, Math.min(py, vh - panelRect.height - VIEWPORT_MARGIN));
+
+        el.style.left = `${Math.round(px)}px`;
+        el.style.top = `${Math.round(py)}px`;
+        el.classList.toggle("visible", this._visible);
+      }
+    }
   }
 
-  // ─── Private: Rendering ─────────────────────────────────────────────
-
-  /**
-   * Render a single translated region.
-   * @param {Object} image - Image record
-   * @param {{ x: number, y: number, width: number, height: number }} bbox - OCR bounding box
-   * @param {{ originalText: string, translatedText: string }} translation
-   */
-  _renderRegion(image, bbox, translation) {
-    const imageRect = image.rect;
-    const imageElement = image.element;
-
-    // Calculate the scale between the image's natural size and its displayed size
-    // The OCR bbox is relative to the image's coordinate space
-    // We need to map it to the page's coordinate space
-    const scaleX = imageRect.width / (image.naturalWidth || image.width);
-    const scaleY = imageRect.height / (image.naturalHeight || image.height);
-
-    // Calculate position on the page
-    // imageRect gives us the image's position on the page
-    // bbox gives us the text position within the image
-    const pageX = imageRect.left + bbox.x * scaleX;
-    const pageY = imageRect.top + bbox.y * scaleY + window.scrollY;
-    const pageW = bbox.width * scaleX;
-    const pageH = bbox.height * scaleY;
-
-    // Create mask element (covers original text)
-    const mask = document.createElement("div");
-    mask.className = `${CLASS_PREFIX}-mask`;
-    mask.setAttribute("data-rikai", "true");
-    mask.style.cssText = `
-      position: absolute;
-      left: ${pageX}px;
-      top: ${pageY}px;
-      width: ${pageW}px;
-      height: ${pageH}px;
-      background-color: ${this._config.maskColor};
-      opacity: ${this._config.maskOpacity};
-      z-index: ${this._config.zIndex};
-      pointer-events: none;
-    `;
-
-    // Create text element (shows translation)
-    const textEl = document.createElement("div");
-    textEl.className = `${CLASS_PREFIX}-text`;
-    textEl.setAttribute("data-rikai", "true");
-
-    // Determine font size based on region height
-    const fontSize = Math.max(10, Math.min(pageH * 0.7, this._config.fontSize));
-
-    textEl.style.cssText = `
-      position: absolute;
-      left: ${pageX}px;
-      top: ${pageY}px;
-      width: ${pageW}px;
-      min-height: ${pageH}px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: ${this._config.padding}px;
-      background-color: ${this._config.backgroundColor};
-      color: ${this._config.textColor};
-      font-size: ${fontSize}px;
-      font-family: ${this._config.fontFamily};
-      line-height: 1.2;
-      text-align: center;
-      border-radius: ${this._config.borderRadius}px;
-      box-shadow: ${this._config.shadow};
-      z-index: ${this._config.zIndex};
-      pointer-events: none;
-      word-break: break-word;
-      overflow: hidden;
-    `;
-
-    textEl.textContent = translation.translatedText;
-
-    // Add to container
-    this._container.appendChild(mask);
-    this._container.appendChild(textEl);
-
-    this._overlays.push(mask, textEl);
-  }
-
-  // ─── Private: Styles ────────────────────────────────────────────────
-
-  /**
-   * Inject a stylesheet for overlay animations and transitions.
-   */
-  _injectStyles() {
-    if (this._styleSheet) return;
-
-    const style = document.createElement("style");
-    style.setAttribute("data-rikai", "true");
-    style.textContent = `
-      .${CLASS_PREFIX}-container {
-        pointer-events: none;
-      }
-      .${CLASS_PREFIX}-mask {
-        transition: opacity 0.2s ease;
-      }
-      .${CLASS_PREFIX}-text {
-        transition: opacity 0.2s ease;
-      }
-    `;
-    document.head.appendChild(style);
-    this._styleSheet = style;
-  }
-}
-
-// Export for use in content.js
-if (typeof window !== "undefined") {
-  window.RikaiOverlay = Overlay;
-}
+  window.RikaiOverlay = OverlayRenderer;
+})();
