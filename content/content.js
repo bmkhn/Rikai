@@ -101,6 +101,7 @@
       return; // already active
     }
 
+    const t0 = performance.now();
     console.log("[Rikai] Activating…");
 
     overlay.activate();
@@ -145,6 +146,8 @@
         // fromCache / no-progress → keep the indeterminate panel as-is
       });
 
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+      console.log(`[Rikai] Activation complete in ${elapsed}s`);
       setPhase("READY");
       overlay.setStatus({ tone: "success", title: "SYSTEM READY" });
       setTimeout(() => {
@@ -153,7 +156,8 @@
 
       startPipeline();
     } catch (err) {
-      console.error("[Rikai] OCR init failed:", err);
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+      console.error(`[Rikai] OCR init failed after ${elapsed}s:`, err);
       setError("OCR INITIALIZATION FAILED", "Unable to load the Japanese OCR model.");
     }
   }

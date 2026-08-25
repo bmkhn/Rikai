@@ -24,12 +24,17 @@
   box-sizing: border-box;
 }
 
-body {
+html {
   width: 320px;
+  border: 1px solid var(--rikai-border);
   background:
     radial-gradient(120% 90% at 50% -20%, rgba(34, 211, 238, 0.08), transparent 60%),
     radial-gradient(100% 80% at 80% 110%, rgba(129, 140, 248, 0.07), transparent 60%),
     var(--rikai-bg);
+}
+
+body {
+  width: 320px;
   color: var(--rikai-text);
   font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
                "Helvetica Neue", Arial, sans-serif;

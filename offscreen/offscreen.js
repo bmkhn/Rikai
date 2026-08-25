@@ -64,6 +64,7 @@
   // ─── INIT ────────────────────────────────────────────────────────────
 
   async function handleInit(requestId, sendResponse) {
+    const t0 = performance.now();
     try {
       if (!window.RikaiMangaOcr) {
         throw new Error("MangaOCR bundle not loaded.");
@@ -71,9 +72,12 @@
       await window.RikaiMangaOcr.init((p) =>
         respond(sendResponse, null, { type: "PROGRESS", phase: "model-load", ...p })
       );
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+      console.log(`[Rikai OCR] Model ready in ${elapsed}s`);
       respond(sendResponse, requestId, { type: "READY" });
     } catch (err) {
-      console.error("[Rikai OCR] Initialization failed:", err);
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+      console.error(`[Rikai OCR] Initialization failed after ${elapsed}s:`, err);
       respond(sendResponse, requestId, {
         type: "ERROR",
         phase: "init",
@@ -90,6 +94,7 @@
    */
   async function handleProcessImage(payload, sendResponse) {
     const requestId = payload.requestId;
+    const t0 = performance.now();
 
     try {
       if (!window.RikaiMangaOcr) {
@@ -124,6 +129,8 @@
         image.close();
       }
 
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+      console.log(`[Rikai OCR] Image processed in ${elapsed}s — ${regions.length} region(s)`);
       respond(sendResponse, requestId, { type: "RESULT", regions });
     } catch (err) {
       console.error("[Rikai OCR] Process failed:", err);
