@@ -9,6 +9,16 @@ interface TabState {
 
 const tabStates = new Map<number, TabState>();
 
+// ─── File URLs ─────────────────────────────────────────────────────
+
+const FILE_URLS: Record<string, string> = {
+  encoder: "https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/encoder_model.onnx",
+  decoder: "https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/decoder_model.onnx",
+  tokenizer: "https://huggingface.co/NorwayFish/manga-ocr/resolve/main/tokenizer.json",
+};
+
+const CACHE_NAME = "rikai-models";
+
 // ─── Eager Offscreen Creation ────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
@@ -35,17 +45,18 @@ chrome.runtime.onMessage.addListener(
   ) => {
     if (!message || typeof message !== "object") return undefined;
 
-    // Progress broadcast from offscreen document → write to storage for popup polling
+    // Progress broadcast from offscreen document
     if (message.source === "rikai-offscreen" && message.type === "PROGRESS") {
       try {
-        chrome.storage?.local?.set({
-          rikaiDownloadProgress: {
-            active: message.phase !== "done" && message.phase !== "error",
-            phase: message.phase || "download",
-            percent: typeof message.percent === "number" ? message.percent : 0,
-            detail: message.detail || message.file || "",
-          },
-        });
+        if (message.files) {
+          chrome.storage?.local?.set({
+            rikaiDownloadProgress: {
+              active: message.phase !== "done" && message.phase !== "error",
+              phase: message.phase || "download",
+              files: message.files,
+            },
+          });
+        }
       } catch {
         // storage unavailable
       }
@@ -93,6 +104,18 @@ chrome.runtime.onMessage.addListener(
         handleDownloadModel(sendResponse);
         return true;
 
+      case "RIKAI_DOWNLOAD_FILE":
+        handleDownloadFile(message.fileKey, sendResponse);
+        return true;
+
+      case "RIKAI_STORE_FILE":
+        handleStoreFile(message.fileKey, message.fileName, message.data, sendResponse);
+        return true;
+
+      case "RIKAI_CANCEL_DOWNLOAD":
+        handleCancelDownload(sendResponse);
+        return true;
+
       default:
         return undefined;
     }
@@ -138,55 +161,168 @@ async function ensureOffscreenDocument(): Promise<void> {
     justification:
       "Runs the MangaOCR model (ONNX Runtime WASM) and image text detection off the page's main thread.",
   });
-
-  setTimeout(() => {
-    chrome.runtime
-      .sendMessage({
-        target: "rikai-offscreen",
-        type: "INIT",
-        requestId: 0,
-        payload: {},
-      })
-      .catch(() => {});
-  }, 3000);
 }
 
-// ─── Model Management ───────────────────────────────────────────────
+// ─── Model Status ──────────────────────────────────────────────────
 
 async function handleCheckModelStatus(
   sendResponse: (response?: any) => void
 ): Promise<void> {
   try {
-    const result = await chrome.storage.local.get("rikaiModelReady");
-    sendResponse({ ready: !!result.rikaiModelReady });
+    const result = await chrome.storage.local.get(["rikaiModelReady", "rikaiFileStatuses"]);
+    const files: Record<string, string> = (result.rikaiFileStatuses as Record<string, string>) || {};
+    sendResponse({ ready: !!result.rikaiModelReady, files });
   } catch (err) {
-    sendResponse({ ready: false });
+    sendResponse({ ready: false, files: {} });
   }
 }
 
-async function handleDeleteModel(
+// ─── Per-file Download ────────────────────────────────────────────
+
+async function handleDownloadFile(
+  fileKey: string,
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  const url = FILE_URLS[fileKey];
+  if (!url) {
+    sendResponse({ ok: false, error: `Unknown file: ${fileKey}` });
+    return;
+  }
+
+  try {
+    // Update file status to downloading
+    await updateFileStatus(fileKey, "downloading");
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(url, new Response(buffer, {
+      headers: { "Content-Type": "application/octet-stream" },
+    }));
+
+    await updateFileStatus(fileKey, "done");
+    sendResponse({ ok: true });
+  } catch (err) {
+    await updateFileStatus(fileKey, "error");
+    sendResponse({ ok: false, error: String(err) });
+  }
+}
+
+// ─── Store file from file picker ──────────────────────────────────
+
+async function handleStoreFile(
+  fileKey: string,
+  fileName: string,
+  data: number[],
   sendResponse: (response?: any) => void
 ): Promise<void> {
   try {
-    // Clear all Cache Storage entries (model weights live here)
-    const names = await caches.keys();
-    await Promise.all(names.map((n) => caches.delete(n)));
-    // Remove readiness flag and progress
-    await chrome.storage.local.remove(["rikaiModelReady", "rikaiDownloadProgress"]);
+    const url = FILE_URLS[fileKey] || `rikai://local/${fileKey}/${fileName}`;
+    const buffer = new Uint8Array(data).buffer;
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(url, new Response(buffer, {
+      headers: { "Content-Type": "application/octet-stream" },
+    }));
+
+    await updateFileStatus(fileKey, "done");
     sendResponse({ ok: true });
   } catch (err) {
     sendResponse({ ok: false, error: String(err) });
   }
 }
 
+// ─── File status tracking ─────────────────────────────────────────
+
+async function updateFileStatus(fileKey: string, status: string): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get("rikaiFileStatuses");
+    const statuses: Record<string, string> = (result.rikaiFileStatuses as Record<string, string>) || {};
+    statuses[fileKey] = status;
+    await chrome.storage.local.set({ rikaiFileStatuses: statuses });
+
+    // Update ready flag if all done
+    const allDone = ["encoder", "decoder", "tokenizer"].every(
+      (k) => statuses[k] === "done"
+    );
+    await chrome.storage.local.set({ rikaiModelReady: allDone });
+  } catch {
+    // storage unavailable
+  }
+}
+
+// ─── Delete Model ─────────────────────────────────────────────────
+
+async function handleDeleteModel(
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  try {
+    const names = await caches.keys();
+    await Promise.all(names.map((n) => caches.delete(n)));
+    await chrome.storage.local.remove([
+      "rikaiModelReady",
+      "rikaiDownloadProgress",
+      "rikaiFileStatuses",
+    ]);
+    sendResponse({ ok: true });
+  } catch (err) {
+    sendResponse({ ok: false, error: String(err) });
+  }
+}
+
+// ─── Cancel Download ──────────────────────────────────────────────
+
+async function handleCancelDownload(
+  sendResponse: (response?: any) => void
+): Promise<void> {
+  try {
+    await ensureOffscreenDocument();
+    chrome.runtime
+      .sendMessage({
+        target: "rikai-offscreen",
+        type: "CANCEL_INIT",
+        requestId: 0,
+        payload: {},
+      })
+      .then(async () => {
+        try {
+          const names = await caches.keys();
+          await Promise.all(names.map((n) => caches.delete(n)));
+        } catch { /* ignore */ }
+        await chrome.storage.local.remove([
+          "rikaiDownloadProgress",
+          "rikaiModelReady",
+          "rikaiFileStatuses",
+        ]);
+        sendResponse({ ok: true });
+      })
+      .catch(async (err: Error) => {
+        try {
+          const names = await caches.keys();
+          await Promise.all(names.map((n) => caches.delete(n)));
+        } catch { /* ignore */ }
+        await chrome.storage.local.remove([
+          "rikaiDownloadProgress",
+          "rikaiModelReady",
+          "rikaiFileStatuses",
+        ]).catch(() => {});
+        sendResponse({ ok: false, error: String(err) });
+      });
+  } catch (err) {
+    sendResponse({ ok: false, error: String(err) });
+  }
+}
+
+// ─── Download All (full model) ────────────────────────────────────
+
 async function handleDownloadModel(
   sendResponse: (response?: any) => void
 ): Promise<void> {
   try {
     await ensureOffscreenDocument();
-    // The offscreen document's INIT handler will download the model.
-    // Progress is written to chrome.storage.local by the OCR engine.
-    // We just need to trigger INIT and wait for it to complete.
     chrome.runtime
       .sendMessage({
         target: "rikai-offscreen",
@@ -195,7 +331,6 @@ async function handleDownloadModel(
         payload: {},
       })
       .then((response: any) => {
-        // Write completion state to storage so popup sees it on reopen
         const progress = response?.type === "READY"
           ? { active: false, phase: "done", percent: 100, detail: "" }
           : { active: false, phase: "error", percent: 0, detail: response?.error || "Failed" };

@@ -76,6 +76,19 @@ const copyHtmlPlugin = {
         JSON.stringify(manifest, null, 2)
       );
 
+      // Copy icons
+      const iconsDir = path.join(ROOT, "icons");
+      const distIconsDir = path.join(DIST, "icons");
+      if (fs.existsSync(iconsDir)) {
+        fs.mkdirSync(distIconsDir, { recursive: true });
+        for (const file of fs.readdirSync(iconsDir)) {
+          if (file.endsWith(".png")) {
+            fs.copyFileSync(path.join(iconsDir, file), path.join(distIconsDir, file));
+          }
+        }
+        console.log("  ✓ Copied icons to dist/");
+      }
+
       console.log("  ✓ Copied HTML, CSS, and manifest to dist/");
     });
   },

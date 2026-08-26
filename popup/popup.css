@@ -306,7 +306,17 @@ body {
 .model-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+}
+
+.model-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--rikai-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .model-status {
@@ -340,41 +350,112 @@ body {
 .model-progress {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
 }
 
-.model-progress .bar {
-  position: relative;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
+.file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--rikai-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.model-progress .bar-fill {
-  position: absolute;
-  inset: 0;
-  width: 0%;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--rikai-accent), var(--rikai-accent-2));
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
-  transition: width 200ms ease;
+.file-row + .file-row {
+  margin-top: 6px;
 }
 
-.model-progress .bar-fill.indeterminate {
-  width: 36%;
-  animation: sweep 1.15s ease-in-out infinite;
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
-@keyframes sweep {
-  0%   { left: -36%; }
-  100% { left: 100%; }
+.file-name {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--rikai-text);
 }
 
-.model-progress-text {
+.file-size {
   font-size: 9px;
   color: var(--rikai-muted);
-  text-align: center;
+}
+
+.file-status {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.file-status.pending    { color: var(--rikai-muted); }
+.file-status.downloading { color: var(--rikai-warning); }
+.file-status.loading    { color: var(--rikai-accent); }
+.file-status.done       { color: var(--rikai-success); }
+.file-status.error      { color: var(--rikai-error); }
+
+.file-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--rikai-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--rikai-muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.file-btn:hover {
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--rikai-accent);
+  border-color: var(--rikai-border-strong);
+}
+
+.file-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.file-btn:disabled:hover {
+  background: transparent;
+  color: var(--rikai-muted);
+}
+
+.file-btn.active {
+  color: var(--rikai-warning);
+  border-color: var(--rikai-warning);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.file-btn.done {
+  color: var(--rikai-success);
+  border-color: var(--rikai-success);
+}
+
+.file-link {
+  color: var(--rikai-accent-2);
+  border-color: rgba(129, 140, 248, 0.3);
+}
+
+.file-link:hover {
+  background: rgba(129, 140, 248, 0.12);
+  color: var(--rikai-accent-2);
+  border-color: var(--rikai-accent-2);
 }
 
 .model-actions {
@@ -429,4 +510,76 @@ body {
 .model-btn--warn:hover {
   background: rgba(251, 191, 36, 0.12);
   box-shadow: 0 0 12px rgba(251, 191, 36, 0.2);
+}
+
+/* ─── Confirmation modal (in-flow) ───────────────────────────────── */
+
+.modal-wrap {
+  padding: 12px 14px;
+  border: 1px solid var(--rikai-border-strong);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: var(--rikai-accent);
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.modal-body {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--rikai-text);
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.modal-body strong {
+  color: var(--rikai-accent);
+}
+
+.modal-sub {
+  color: var(--rikai-muted);
+  font-size: 10px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-btn {
+  flex: 1;
+  cursor: pointer;
+  padding: 9px 0;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  border: 1px solid var(--rikai-border-strong);
+  background: transparent;
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+
+.modal-btn--cancel {
+  color: var(--rikai-muted);
+  border-color: var(--rikai-border);
+}
+
+.modal-btn--cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.modal-btn--ok {
+  color: var(--rikai-accent);
+  border-color: var(--rikai-border-strong);
+}
+
+.modal-btn--ok:hover {
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: var(--rikai-glow);
 }

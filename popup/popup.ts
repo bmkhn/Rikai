@@ -11,12 +11,52 @@ const retryBtn = document.getElementById("retry-btn") as HTMLElement;
 // Model management elements
 const modelIcon = document.getElementById("model-icon") as HTMLElement;
 const modelLabel = document.getElementById("model-label") as HTMLElement;
-const modelProgress = document.getElementById("model-progress") as HTMLElement;
-const modelBarFill = document.getElementById("model-bar-fill") as HTMLElement;
-const modelProgressText = document.getElementById("model-progress-text") as HTMLElement;
-const downloadBtn = document.getElementById("download-btn") as HTMLElement;
+const downloadAllBtn = document.getElementById("download-all-btn") as HTMLElement;
+const cancelBtn = document.getElementById("cancel-btn") as HTMLElement;
 const deleteBtn = document.getElementById("delete-btn") as HTMLElement;
 const repairBtn = document.getElementById("repair-btn") as HTMLElement;
+
+// Per-file elements
+type FileType = "encoder" | "decoder" | "tokenizer";
+
+interface FileDef {
+  key: FileType;
+  statusEl: HTMLElement;
+  downloadBtn: HTMLElement;
+  locateBtn: HTMLElement;
+  fileInput: HTMLInputElement;
+}
+
+const FILES: FileDef[] = [
+  {
+    key: "encoder",
+    statusEl: document.getElementById("encoder-status")!,
+    downloadBtn: document.getElementById("encoder-download")!,
+    locateBtn: document.getElementById("encoder-locate")!,
+    fileInput: document.getElementById("encoder-file") as HTMLInputElement,
+  },
+  {
+    key: "decoder",
+    statusEl: document.getElementById("decoder-status")!,
+    downloadBtn: document.getElementById("decoder-download")!,
+    locateBtn: document.getElementById("decoder-locate")!,
+    fileInput: document.getElementById("decoder-file") as HTMLInputElement,
+  },
+  {
+    key: "tokenizer",
+    statusEl: document.getElementById("tokenizer-status")!,
+    downloadBtn: document.getElementById("tokenizer-download")!,
+    locateBtn: document.getElementById("tokenizer-locate")!,
+    fileInput: document.getElementById("tokenizer-file") as HTMLInputElement,
+  },
+];
+
+interface FileProgress {
+  name: string;
+  sizeMB: number;
+  phase: "pending" | "downloading" | "loading" | "done" | "error";
+  percent: number;
+}
 
 let currentTabId: number | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -24,6 +64,39 @@ let progressPollTimer: ReturnType<typeof setInterval> | null = null;
 let lastPhase: string | null = null;
 let modelReady = false;
 let downloading = false;
+
+// Track per-file status from storage
+let fileStatuses: Record<FileType, string> = {
+  encoder: "pending",
+  decoder: "pending",
+  tokenizer: "pending",
+};
+
+// ─── Confirm modal ───────────────────────────────────────────────────
+
+function showConfirm(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("confirm-modal");
+    if (!modal) {
+      resolve(true);
+      return;
+    }
+    modal.hidden = false;
+    function handler(e: Event) {
+      const target = e.target as HTMLElement;
+      if (target.id === "confirm-ok") {
+        modal!.hidden = true;
+        modal!.removeEventListener("click", handler);
+        resolve(true);
+      } else if (target.id === "confirm-cancel") {
+        modal!.hidden = true;
+        modal!.removeEventListener("click", handler);
+        resolve(false);
+      }
+    }
+    modal.addEventListener("click", handler);
+  });
+}
 
 // ─── Init ──────────────────────────────────────────────────────────────
 
@@ -38,37 +111,19 @@ async function init(): Promise<void> {
     }
     currentTabId = tab.id ?? null;
 
-    // Check model status + download progress
-    const [modelStatus, progressResult] = await Promise.all([
-      chrome.runtime
-        .sendMessage({ type: "RIKAI_CHECK_MODEL_STATUS" })
-        .catch(() => ({ ready: false })),
-      chrome.storage.local.get("rikaiDownloadProgress") as Promise<Record<string, any>>,
-    ]);
+    // Check model status
+    const modelStatus = await chrome.runtime
+      .sendMessage({ type: "RIKAI_CHECK_MODEL_STATUS" })
+      .catch(() => ({ ready: false, files: {} }));
     modelReady = !!modelStatus.ready;
 
-    // Handle download progress state from storage
-    const progress = progressResult.rikaiDownloadProgress;
-    if (progress) {
-      if (progress.phase === "done" || progress.phase === "error") {
-        // Download completed or failed while popup was closed — clear stale state
-        chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
-        if (progress.phase === "done") modelReady = true;
-      } else if (progress.active && !modelReady) {
-        // Download was in progress — show progress UI and resume polling
-        downloading = true;
-        downloadBtn.setAttribute("hidden", "");
-        deleteBtn.setAttribute("hidden", "");
-        modelProgress.hidden = false;
-        modelBarFill.classList.remove("indeterminate");
-        modelBarFill.style.width = `${Math.max(0, Math.min(100, progress.percent || 0))}%`;
-        modelProgressText.textContent = progress.detail || `${progress.percent || 0}%`;
-        modelLabel.textContent = "DOWNLOADING";
-        modelLabel.className = "model-label downloading";
-        modelIcon.textContent = "↓";
-        startProgressPolling();
-      }
+    // Update per-file statuses from storage
+    if (modelStatus.files) {
+      fileStatuses = { ...fileStatuses, ...modelStatus.files };
     }
+
+    // Clear any stale download progress
+    chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
 
     updateModelUI();
 
@@ -85,15 +140,27 @@ async function init(): Promise<void> {
   }
 }
 
+// ─── Event listeners ─────────────────────────────────────────────────
+
 powerToggle.addEventListener("change", onToggle);
 retryBtn.addEventListener("click", () => {
   hideError();
   sendToTab(currentTabId, { type: "RIKAI_ACTIVATE" });
 });
 
-downloadBtn.addEventListener("click", onDownload);
+downloadAllBtn.addEventListener("click", onDownloadAll);
+cancelBtn.addEventListener("click", onCancel);
 deleteBtn.addEventListener("click", onDelete);
 repairBtn.addEventListener("click", onRepair);
+
+// Per-file button listeners
+for (const f of FILES) {
+  f.downloadBtn.addEventListener("click", () => onDownloadFile(f.key));
+  f.locateBtn.addEventListener("click", () => f.fileInput.click());
+  f.fileInput.addEventListener("change", () => onLocateFile(f));
+}
+
+// ─── Toggle ───────────────────────────────────────────────────────────
 
 async function onToggle(): Promise<void> {
   if (!modelReady) {
@@ -120,42 +187,121 @@ async function onToggle(): Promise<void> {
   refreshFromTab();
 }
 
-async function onDownload(): Promise<void> {
+// ─── Per-file download ───────────────────────────────────────────────
+
+async function onDownloadFile(fileKey: FileType): Promise<void> {
   if (downloading) return;
+
+  const confirmed = await showConfirm();
+  if (!confirmed) return;
+
   downloading = true;
-
-  downloadBtn.setAttribute("hidden", "");
+  downloadAllBtn.setAttribute("hidden", "");
   deleteBtn.setAttribute("hidden", "");
-  modelProgress.hidden = false;
-  modelBarFill.style.width = "";
-  modelBarFill.classList.add("indeterminate");
-  modelLabel.textContent = "DOWNLOADING";
-  modelLabel.className = "model-label downloading";
-  modelIcon.textContent = "↓";
-  modelProgressText.textContent = "Starting…";
+  cancelBtn.removeAttribute("hidden");
 
-  // Persist download state so it survives popup close
-  chrome.storage.local
-    .set({ rikaiDownloadProgress: { active: true, phase: "download", percent: 0, detail: "Starting…" } })
-    .catch(() => {});
-
-  // Start polling progress from storage
-  startProgressPolling();
+  setFileStatus(fileKey, "downloading", "0%");
+  updateToggleState();
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: "RIKAI_DOWNLOAD_MODEL" });
+    const response = await chrome.runtime.sendMessage({
+      type: "RIKAI_DOWNLOAD_FILE",
+      fileKey,
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Download failed");
+    }
+    setFileStatus(fileKey, "done", "✓");
+  } catch (err: any) {
+    setFileStatus(fileKey, "error", "Failed");
+  } finally {
+    downloading = false;
+    cancelBtn.setAttribute("hidden", "");
+    updateModelUI();
+  }
+}
+
+async function onDownloadAll(): Promise<void> {
+  if (downloading) return;
+
+  const confirmed = await showConfirm();
+  if (!confirmed) return;
+
+  downloading = true;
+  downloadAllBtn.setAttribute("hidden", "");
+  deleteBtn.setAttribute("hidden", "");
+  cancelBtn.removeAttribute("hidden");
+
+  for (const f of FILES) {
+    if (fileStatuses[f.key] !== "done") {
+      setFileStatus(f.key, "downloading", "0%");
+    }
+  }
+  updateToggleState();
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "RIKAI_DOWNLOAD_MODEL",
+    });
     if (!response?.ok) {
       throw new Error(response?.error || "Download failed");
     }
     modelReady = true;
+    for (const f of FILES) {
+      setFileStatus(f.key, "done", "✓");
+    }
   } catch (err: any) {
     showError("Download failed", err?.message || "Check your connection.");
     modelReady = false;
   } finally {
     downloading = false;
     stopProgressPolling();
+    cancelBtn.setAttribute("hidden", "");
     updateModelUI();
   }
+}
+
+// ─── Locate (file picker) ───────────────────────────────────────────
+
+async function onLocateFile(f: FileDef): Promise<void> {
+  const file = f.fileInput.files?.[0];
+  if (!file) return;
+
+  setFileStatus(f.key, "loading", "Loading…");
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const response = await chrome.runtime.sendMessage({
+      type: "RIKAI_STORE_FILE",
+      fileKey: f.key,
+      fileName: file.name,
+      data: Array.from(new Uint8Array(arrayBuffer)),
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Failed to store file");
+    }
+    setFileStatus(f.key, "done", "✓");
+  } catch (err: any) {
+    setFileStatus(f.key, "error", "Failed");
+  } finally {
+    f.fileInput.value = "";
+    updateModelUI();
+  }
+}
+
+// ─── Cancel / Delete / Repair ───────────────────────────────────────
+
+async function onCancel(): Promise<void> {
+  if (!downloading) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "RIKAI_CANCEL_DOWNLOAD" });
+  } catch {
+    // Best effort
+  }
+  downloading = false;
+  stopProgressPolling();
+  chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
+  updateModelUI();
 }
 
 async function onDelete(): Promise<void> {
@@ -163,6 +309,9 @@ async function onDelete(): Promise<void> {
     await chrome.runtime.sendMessage({ type: "RIKAI_DELETE_MODEL" });
     modelReady = false;
     powerToggle.checked = false;
+    for (const f of FILES) {
+      setFileStatus(f.key, "pending", "—");
+    }
     updateModelUI();
   } catch (err: any) {
     showError("Delete failed", err?.message || "Unknown error.");
@@ -171,54 +320,101 @@ async function onDelete(): Promise<void> {
 
 async function onRepair(): Promise<void> {
   if (downloading) return;
-
   try {
-    // Step 1: Delete everything
     await chrome.runtime.sendMessage({ type: "RIKAI_DELETE_MODEL" });
     modelReady = false;
+    for (const f of FILES) {
+      setFileStatus(f.key, "pending", "—");
+    }
     updateModelUI();
-
-    // Step 2: Re-download
-    await onDownload();
+    await onDownloadAll();
   } catch (err: any) {
     showError("Repair failed", err?.message || "Unknown error.");
     updateModelUI();
   }
 }
 
-function updateModelUI(): void {
-  if (downloading) {
-    // Already showing progress, don't overwrite
-    return;
+// ─── File status helpers ────────────────────────────────────────────
+
+function setFileStatus(
+  fileKey: FileType,
+  phase: string,
+  text: string
+): void {
+  fileStatuses[fileKey] = phase;
+  const f = FILES.find((x) => x.key === fileKey);
+  if (!f) return;
+  f.statusEl.textContent = text;
+  f.statusEl.className = `file-status ${phase}`;
+
+  // Update download button appearance
+  f.downloadBtn.classList.remove("active", "done");
+  if (phase === "downloading") {
+    f.downloadBtn.classList.add("active");
+    f.downloadBtn.setAttribute("disabled", "");
+  } else if (phase === "done") {
+    f.downloadBtn.classList.add("done");
+    f.downloadBtn.removeAttribute("disabled");
+  } else if (phase === "loading") {
+    f.downloadBtn.setAttribute("disabled", "");
+  } else {
+    f.downloadBtn.removeAttribute("disabled");
   }
 
-  if (modelReady) {
+  updateToggleState();
+}
+
+function updateToggleState(): void {
+  const allDone = Object.values(fileStatuses).every((s) => s === "done");
+  const anyActive = Object.values(fileStatuses).some(
+    (s) => s === "downloading" || s === "loading"
+  );
+
+  if (!allDone || anyActive) {
+    powerToggle.disabled = true;
+    powerToggle.checked = false;
+  } else {
+    powerToggle.disabled = false;
+  }
+}
+
+function updateModelUI(): void {
+  if (downloading) return;
+
+  const allDone = Object.values(fileStatuses).every((s) => s === "done");
+  const anyActive = Object.values(fileStatuses).some(
+    (s) => s === "downloading" || s === "loading"
+  );
+
+  if (allDone) {
     modelIcon.textContent = "✓";
-    modelLabel.textContent = "MODEL READY";
+    modelLabel.textContent = "ALL FILES LOADED";
     modelLabel.className = "model-label ready";
-    modelProgress.hidden = true;
-    downloadBtn.removeAttribute("hidden");
-    downloadBtn.textContent = "RE-DOWNLOAD";
+    downloadAllBtn.setAttribute("hidden", "");
     deleteBtn.removeAttribute("hidden");
-    // Clear stale progress from previous session
-    chrome.storage.local.remove("rikaiDownloadProgress").catch(() => {});
+    cancelBtn.setAttribute("hidden", "");
     repairBtn.setAttribute("hidden", "");
     powerToggle.disabled = false;
+  } else if (anyActive) {
+    // Don't overwrite active states
+    return;
   } else {
     modelIcon.textContent = "—";
     modelLabel.textContent = "MODEL NOT DOWNLOADED";
     modelLabel.className = "model-label";
-    modelProgress.hidden = true;
-    downloadBtn.removeAttribute("hidden");
-    downloadBtn.textContent = "DOWNLOAD";
+    downloadAllBtn.removeAttribute("hidden");
+    downloadAllBtn.textContent = "DOWNLOAD ALL";
     deleteBtn.setAttribute("hidden", "");
+    cancelBtn.setAttribute("hidden", "");
     repairBtn.removeAttribute("hidden");
     powerToggle.disabled = true;
     powerToggle.checked = false;
   }
+
+  updateToggleState();
 }
 
-// ─── Progress polling ──────────────────────────────────────────────────
+// ─── Progress polling ──────────────────────────────────────────────
 
 function startProgressPolling(): void {
   stopProgressPolling();
@@ -235,27 +431,43 @@ function stopProgressPolling(): void {
 async function pollDownloadProgress(): Promise<void> {
   try {
     const result: Record<string, any> = await chrome.storage.local.get("rikaiDownloadProgress");
-    const progress = result.rikaiDownloadProgress as { active: boolean; phase: string; percent: number; detail: string } | undefined;
+    const progress = result.rikaiDownloadProgress as {
+      active: boolean;
+      phase: string;
+      files?: FileProgress[];
+    } | undefined;
     if (!progress) return;
 
-    if (progress.active) {
-      modelBarFill.classList.remove("indeterminate");
-      modelBarFill.style.width = `${Math.max(0, Math.min(100, progress.percent))}%`;
-      modelProgressText.textContent = progress.detail || `${progress.percent}%`;
-    } else if (progress.phase === "done") {
-      modelBarFill.style.width = "100%";
-      modelProgressText.textContent = "Complete";
-    } else if (progress.phase === "error") {
-      modelBarFill.classList.remove("indeterminate");
-      modelBarFill.style.width = "0%";
-      modelProgressText.textContent = `Failed: ${progress.detail || "unknown error"}`;
+    if (progress.files) {
+      for (const fp of progress.files) {
+        const key = fp.name.includes("encoder")
+          ? "encoder"
+          : fp.name.includes("decoder")
+          ? "decoder"
+          : "tokenizer";
+        if (fp.phase === "done") {
+          setFileStatus(key, "done", "✓");
+        } else if (fp.phase === "downloading") {
+          setFileStatus(key, "downloading", `${fp.percent}%`);
+        } else if (fp.phase === "loading") {
+          setFileStatus(key, "loading", "Loading…");
+        }
+      }
+    }
+
+    if (progress.phase === "done") {
+      modelReady = true;
+      downloading = false;
+      stopProgressPolling();
+      for (const f of FILES) setFileStatus(f.key, "done", "✓");
+      updateModelUI();
     }
   } catch {
-    // Storage access failed, ignore
+    // Storage access failed
   }
 }
 
-// ─── Messaging ─────────────────────────────────────────────────────────
+// ─── Messaging ─────────────────────────────────────────────────────
 
 function sendToTab(tabId: number | null, message: any): Promise<any> {
   if (typeof tabId !== "number") {
@@ -264,7 +476,7 @@ function sendToTab(tabId: number | null, message: any): Promise<any> {
   return chrome.tabs.sendMessage(tabId, message);
 }
 
-// ─── State polling ─────────────────────────────────────────────────────
+// ─── State polling ─────────────────────────────────────────────────
 
 function startPolling(): void {
   stopPolling();
@@ -303,7 +515,7 @@ function syncToggle(phase: string): void {
   }
 }
 
-// ─── Rendering ─────────────────────────────────────────────────────────
+// ─── Rendering ─────────────────────────────────────────────────────
 
 const PHASE_LABELS: Record<string, string> = {
   OFF: "OFFLINE",

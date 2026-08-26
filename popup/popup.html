@@ -14,20 +14,79 @@
       <div class="brand-sub">TRANSLATION SYSTEM</div>
     </header>
 
-    <!-- Model management (above toggle) -->
+    <!-- Model files -->
     <section id="model-section" class="model-section">
-      <div id="model-status" class="model-status">
+      <div id="model-header" class="model-header">
         <span id="model-icon" class="model-icon">—</span>
         <span id="model-label" class="model-label">Checking model…</span>
       </div>
-      <div id="model-progress" class="model-progress" hidden>
-        <div class="bar"><div id="model-bar-fill" class="bar-fill"></div></div>
-        <span id="model-progress-text" class="model-progress-text"></span>
+
+      <!-- Encoder -->
+      <div class="file-row" data-file="encoder">
+        <div class="file-info">
+          <span class="file-name">Encoder</span>
+          <span class="file-size">(343 MB)</span>
+          <span id="encoder-status" class="file-status pending">—</span>
+        </div>
+        <div class="file-actions">
+          <button id="encoder-download" class="file-btn" title="Download from HuggingFace">↓</button>
+          <button id="encoder-locate" class="file-btn" title="Load from local file">⊞</button>
+          <a id="encoder-link" class="file-btn file-link" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/tree/main/onnx" target="_blank" title="Open HuggingFace page">↗</a>
+        </div>
       </div>
+
+      <!-- Decoder -->
+      <div class="file-row" data-file="decoder">
+        <div class="file-info">
+          <span class="file-name">Decoder</span>
+          <span class="file-size">(117 MB)</span>
+          <span id="decoder-status" class="file-status pending">—</span>
+        </div>
+        <div class="file-actions">
+          <button id="decoder-download" class="file-btn" title="Download from HuggingFace">↓</button>
+          <button id="decoder-locate" class="file-btn" title="Load from local file">⊞</button>
+          <a id="decoder-link" class="file-btn file-link" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/tree/main/onnx" target="_blank" title="Open HuggingFace page">↗</a>
+        </div>
+      </div>
+
+      <!-- Tokenizer -->
+      <div class="file-row" data-file="tokenizer">
+        <div class="file-info">
+          <span class="file-name">Tokenizer</span>
+          <span class="file-size">(0.1 MB)</span>
+          <span id="tokenizer-status" class="file-status pending">—</span>
+        </div>
+        <div class="file-actions">
+          <button id="tokenizer-download" class="file-btn" title="Download from HuggingFace">↓</button>
+          <button id="tokenizer-locate" class="file-btn" title="Load from local file">⊞</button>
+          <a id="tokenizer-link" class="file-btn file-link" href="https://huggingface.co/NorwayFish/manga-ocr/tree/main" target="_blank" title="Open HuggingFace page">↗</a>
+        </div>
+      </div>
+
+      <!-- Hidden file inputs for locate -->
+      <input type="file" id="encoder-file" accept=".onnx" hidden>
+      <input type="file" id="decoder-file" accept=".onnx" hidden>
+      <input type="file" id="tokenizer-file" accept=".json" hidden>
+
+      <!-- Action buttons -->
       <div id="model-actions" class="model-actions">
-        <button id="download-btn" class="model-btn" hidden>DOWNLOAD</button>
-        <button id="delete-btn" class="model-btn model-btn--danger" hidden>DELETE</button>
+        <button id="download-all-btn" class="model-btn" hidden>DOWNLOAD ALL</button>
+        <button id="cancel-btn" class="model-btn model-btn--danger" hidden>CANCEL</button>
+        <button id="delete-btn" class="model-btn model-btn--danger" hidden>DELETE ALL</button>
         <button id="repair-btn" class="model-btn model-btn--warn" hidden>REPAIR</button>
+      </div>
+
+      <!-- Download confirmation -->
+      <div id="confirm-modal" class="modal-wrap" hidden>
+        <div class="modal-header">DOWNLOAD MODEL</div>
+        <p class="modal-body">
+          Download the Japanese OCR model (<strong>~460 MB</strong>)?<br>
+          <span class="modal-sub">One-time download, cached by the browser.</span>
+        </p>
+        <div class="modal-actions">
+          <button id="confirm-cancel" class="modal-btn modal-btn--cancel">CANCEL</button>
+          <button id="confirm-ok" class="modal-btn modal-btn--ok">DOWNLOAD</button>
+        </div>
       </div>
     </section>
 
