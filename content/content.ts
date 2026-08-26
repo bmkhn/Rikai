@@ -30,11 +30,7 @@ interface ImageRef {
 
 interface InitProgress {
   phase?: string;
-  downloading?: boolean;
-  loadedMB?: number;
-  totalMB?: number;
   percent?: number;
-  fromCache?: boolean;
 }
 
 (() => {
@@ -70,6 +66,7 @@ interface InitProgress {
     (message: any, _sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
       switch (message?.type) {
         case "RIKAI_ACTIVATE":
+        case "RIKAI_AUTO_INIT":
           activate().catch((err: Error) => {
             console.error("[Rikai] Activation failed:", err);
             setError("ACTIVATION FAILED", String(err?.message || err));
@@ -154,16 +151,7 @@ interface InitProgress {
           });
           return;
         }
-        if (p.downloading) {
-          overlay.setStatus({
-            tone: "loading",
-            title: "FIRST-TIME SETUP",
-            detail:
-              `Downloading Japanese OCR model · ${p.loadedMB} / ${p.totalMB} MB · ` +
-              `this happens once, then it's cached`,
-            percent: p.percent,
-          });
-        } else if (p.percent != null && !p.fromCache) {
+        if (p.percent != null) {
           overlay.setStatus({
             tone: "loading",
             title: "LOADING OCR ENGINE",

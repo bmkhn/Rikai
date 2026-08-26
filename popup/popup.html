@@ -29,9 +29,12 @@
           <span id="encoder-status" class="file-status pending">—</span>
         </div>
         <div class="file-actions">
-          <button id="encoder-download" class="file-btn" title="Download from HuggingFace">↓</button>
-          <button id="encoder-locate" class="file-btn" title="Load from local file">⊞</button>
-          <a id="encoder-link" class="file-btn file-link" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/tree/main/onnx" target="_blank" title="Open HuggingFace page">↗</a>
+          <a id="encoder-download" class="file-btn" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/encoder_model.onnx?download=true" download title="Download encoder_model.onnx">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9M4.5 8.5 8 12l3.5-3.5M3 14h10"/></svg>
+          </a>
+          <button id="encoder-locate" class="file-btn" title="Locate downloaded file">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          </button>
         </div>
       </div>
 
@@ -43,9 +46,12 @@
           <span id="decoder-status" class="file-status pending">—</span>
         </div>
         <div class="file-actions">
-          <button id="decoder-download" class="file-btn" title="Download from HuggingFace">↓</button>
-          <button id="decoder-locate" class="file-btn" title="Load from local file">⊞</button>
-          <a id="decoder-link" class="file-btn file-link" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/tree/main/onnx" target="_blank" title="Open HuggingFace page">↗</a>
+          <a id="decoder-download" class="file-btn" href="https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/decoder_model.onnx?download=true" download title="Download decoder_model.onnx">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9M4.5 8.5 8 12l3.5-3.5M3 14h10"/></svg>
+          </a>
+          <button id="decoder-locate" class="file-btn" title="Locate downloaded file">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          </button>
         </div>
       </div>
 
@@ -57,9 +63,12 @@
           <span id="tokenizer-status" class="file-status pending">—</span>
         </div>
         <div class="file-actions">
-          <button id="tokenizer-download" class="file-btn" title="Download from HuggingFace">↓</button>
-          <button id="tokenizer-locate" class="file-btn" title="Load from local file">⊞</button>
-          <a id="tokenizer-link" class="file-btn file-link" href="https://huggingface.co/NorwayFish/manga-ocr/tree/main" target="_blank" title="Open HuggingFace page">↗</a>
+          <a id="tokenizer-download" class="file-btn" href="https://huggingface.co/NorwayFish/manga-ocr/resolve/main/tokenizer.json?download=true" download title="Download tokenizer.json — If it opens in the browser, press Ctrl+S to save as JSON">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9M4.5 8.5 8 12l3.5-3.5M3 14h10"/></svg>
+          </a>
+          <button id="tokenizer-locate" class="file-btn" title="Locate downloaded file">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          </button>
         </div>
       </div>
 
@@ -70,23 +79,7 @@
 
       <!-- Action buttons -->
       <div id="model-actions" class="model-actions">
-        <button id="download-all-btn" class="model-btn" hidden>DOWNLOAD ALL</button>
-        <button id="cancel-btn" class="model-btn model-btn--danger" hidden>CANCEL</button>
-        <button id="delete-btn" class="model-btn model-btn--danger" hidden>DELETE ALL</button>
-        <button id="repair-btn" class="model-btn model-btn--warn" hidden>REPAIR</button>
-      </div>
-
-      <!-- Download confirmation -->
-      <div id="confirm-modal" class="modal-wrap" hidden>
-        <div class="modal-header">DOWNLOAD MODEL</div>
-        <p class="modal-body">
-          Download the Japanese OCR model (<strong>~460 MB</strong>)?<br>
-          <span class="modal-sub">One-time download, cached by the browser.</span>
-        </p>
-        <div class="modal-actions">
-          <button id="confirm-cancel" class="modal-btn modal-btn--cancel">CANCEL</button>
-          <button id="confirm-ok" class="modal-btn modal-btn--ok">DOWNLOAD</button>
-        </div>
+        <button id="delete-btn" class="model-btn model-btn--danger">RESET CACHE</button>
       </div>
     </section>
 

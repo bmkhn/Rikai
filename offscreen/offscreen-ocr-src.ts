@@ -13,16 +13,12 @@ import {
   AutoImageProcessor,
   RawImage,
   env,
-  AutoTokenizer as TokenizerType,
-  AutoImageProcessor as ProcessorType,
 } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web";
 
 // ─── Configuration ──────────────────────────────────────────────────
 
 const TOKENIZER_REPO = "NorwayFish/manga-ocr";
-const ENCODER_REPO = "onnx-community/manga-ocr-base-ONNX";
-const DECODER_REPO = "onnx-community/manga-ocr-base-ONNX";
 
 // Extension pages are not cross-origin isolated, so WASM threading is off.
 ort.env.wasm.numThreads = 1;
@@ -36,14 +32,12 @@ env.useBrowserCache = true;
 
 // ─── Types ──────────────────────────────────────────────────────────
 
+type TokenizerType = Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>>;
+type ProcessorType = Awaited<ReturnType<typeof AutoImageProcessor.from_pretrained>>;
+
 interface InitProgress {
   percent?: number;
   phase?: string;
-  file?: string;
-  downloading?: boolean;
-  loadedMB?: number;
-  totalMB?: number;
-  fromCache?: boolean;
 }
 
 interface ImageRef {
@@ -58,100 +52,38 @@ let imageProcessor: ProcessorType | null = null;
 let encoderSession: ort.InferenceSession | null = null;
 let decoderSession: ort.InferenceSession | null = null;
 let ready = false;
-let initAbortController: AbortController | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function baseUrl(repo: string, filename: string): string {
-  return `https://huggingface.co/${repo}/resolve/main/${filename}`;
-}
-
-interface FileProgress {
-  name: string;
-  sizeMB: number;
-  phase: "pending" | "downloading" | "loading" | "done" | "error";
-  percent: number;
-}
-
-function writeDownloadProgress(files: FileProgress[]): void {
-  try {
-    const active = files.some((f) => f.phase === "downloading" || f.phase === "loading");
-    const done = files.every((f) => f.phase === "done");
-    const phase = done ? "done" : "download";
-    // Write to storage directly (popup polls this)
-    chrome.storage?.local?.set({
-      rikaiDownloadProgress: { active, phase, files },
-    });
-    // Also broadcast so background can forward to popup if open
-    chrome.runtime
-      .sendMessage({ source: "rikai-offscreen", type: "PROGRESS", phase, files })
-      .catch(() => {});
-  } catch {
-    // storage may not be available in offscreen context
-  }
-}
-
 async function loadOnnxSession(
-  repo: string,
   filename: string,
-  onProgress?: (p: { phase: string; file: string; percent?: number }) => void,
-  signal?: AbortSignal
+  url: string
 ): Promise<ort.InferenceSession> {
-  const url = baseUrl(repo, filename);
-
   // Check Cache Storage first (user may have located the file locally)
   let buffer: ArrayBuffer | null = null;
   try {
     const cache = await caches.open("rikai-models");
     const cached = await cache.match(url);
     if (cached) {
+      console.log(`[Rikai OCR] ${filename} found in cache`);
       buffer = await cached.arrayBuffer();
-      if (onProgress) onProgress({ phase: "download", file: filename, percent: 100 });
+    } else {
+      console.log(`[Rikai OCR] ${filename} not in cache, will fetch`);
     }
-  } catch {
-    // Cache Storage unavailable
+  } catch (err) {
+    console.warn(`[Rikai OCR] Cache lookup failed for ${filename}:`, err);
   }
 
   if (!buffer) {
-    const response = await fetch(url, { signal });
+    console.log(`[Rikai OCR] Fetching ${filename} from network…`);
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Failed to fetch ${filename}: HTTP ${response.status}`);
     }
-
-    // Track download progress via Content-Length + ReadableStream
-    const contentLength = Number(response.headers.get("content-length")) || 0;
-    const reader = response.body?.getReader();
-    let loaded = 0;
-
-    if (reader && contentLength > 0) {
-      const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.byteLength;
-        const percent = Math.round((loaded / contentLength) * 100);
-        if (onProgress) {
-          onProgress({ phase: "download", file: filename, percent });
-        }
-      }
-      const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
-      const merged = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const chunk of chunks) {
-        merged.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      buffer = merged.buffer;
-    } else {
-      buffer = await response.arrayBuffer();
-    }
+    buffer = await response.arrayBuffer();
   }
 
-  if (onProgress) {
-    onProgress({ phase: "load", file: filename });
-  }
-
+  console.log(`[Rikai OCR] Creating ONNX session for ${filename} (${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB)…`);
   return ort.InferenceSession.create(buffer, {
     executionProviders: ["wasm"],
   });
@@ -171,19 +103,7 @@ interface MangaOcrEngine {
 
     const t0 = performance.now();
 
-    try {
-    // Per-file progress tracking
-    const files: FileProgress[] = [
-      { name: "Encoder model", sizeMB: 343, phase: "pending", percent: 0 },
-      { name: "Decoder model", sizeMB: 117, phase: "pending", percent: 0 },
-      { name: "Tokenizer", sizeMB: 0, phase: "pending", percent: 0 },
-    ];
-    const getIdx = (file: string) =>
-      file.includes("encoder") ? 0 : file.includes("decoder") ? 1 : 2;
-
     // Load tokenizer + image processor from NorwayFish (has tokenizer.json)
-    files[2].phase = "downloading";
-    writeDownloadProgress(files);
     onProgress({ phase: "tokenizer", percent: 0 });
     const [tok, proc] = await Promise.all([
       AutoTokenizer.from_pretrained(TOKENIZER_REPO) as Promise<TokenizerType>,
@@ -191,40 +111,15 @@ interface MangaOcrEngine {
     ]);
     tokenizer = tok;
     imageProcessor = proc;
-    files[2].phase = "done";
-    files[2].percent = 100;
-    writeDownloadProgress(files);
     onProgress({ phase: "tokenizer", percent: 100 });
 
-    // Load encoder and decoder ONNX models in parallel
-    files[0].phase = "downloading";
-    files[1].phase = "downloading";
-    writeDownloadProgress(files);
+    // Load encoder and decoder ONNX models from cache
     onProgress({ phase: "download", percent: 0 });
 
-    const trackProgress = (p: { phase: string; file: string; percent?: number }) => {
-      const idx = getIdx(p.file);
-      if (p.phase === "download" && typeof p.percent === "number") {
-        files[idx].percent = p.percent;
-      }
-      if (p.phase === "load") {
-        files[idx].phase = "loading";
-        files[idx].percent = 100;
-      }
-      writeDownloadProgress(files);
-    };
-
-    initAbortController = new AbortController();
-    const signal = initAbortController.signal;
-
     const [enc, dec] = await Promise.all([
-      loadOnnxSession(ENCODER_REPO, "onnx/encoder_model.onnx", trackProgress, signal),
-      loadOnnxSession(DECODER_REPO, "onnx/decoder_model.onnx", trackProgress, signal),
+      loadOnnxSession("encoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/encoder_model.onnx`),
+      loadOnnxSession("decoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/decoder_model.onnx`),
     ]);
-    initAbortController = null;
-
-    files[0].phase = "done";
-    files[1].phase = "done";
 
     encoderSession = enc;
     decoderSession = dec;
@@ -243,35 +138,9 @@ interface MangaOcrEngine {
     );
 
     ready = true;
-    // Note: readiness flag is set by the background service worker
-    // (offscreen document cannot access chrome.storage)
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
     console.log(`[Rikai OCR] Init complete in ${elapsed}s`);
     return true;
-
-    } catch (err) {
-      initAbortController = null;
-      if ((err as Error)?.name === "AbortError") {
-        // Mark all non-done files as cancelled
-        for (const f of files) {
-          if (f.phase !== "done") f.phase = "pending";
-        }
-        writeDownloadProgress(files);
-      } else {
-        for (const f of files) {
-          if (f.phase !== "done") f.phase = "error";
-        }
-        writeDownloadProgress(files);
-      }
-      throw err;
-    }
-  },
-
-  cancelInit(): void {
-    if (initAbortController) {
-      initAbortController.abort();
-      initAbortController = null;
-    }
   },
 
   isReady(): boolean {

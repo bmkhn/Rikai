@@ -45,23 +45,14 @@ class MangaOcrClient {
   private _pending: Map<number, (msg: OffscreenMessage) => void>;
   private _requestCounter: number;
   private _ready: boolean;
-  private _progressListener: (p: Record<string, any>) => void;
 
   constructor() {
     this._pending = new Map();
     this._requestCounter = 0;
     this._ready = false;
-    this._progressListener = () => {};
 
     chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
       if (!message || message.source !== "rikai-offscreen") return;
-
-      if (message.type === "PROGRESS") {
-        this._progressListener(
-          message.percent != null ? { percent: message.percent } : message
-        );
-        return;
-      }
 
       const resolve =
         message.requestId != null ? this._pending.get(message.requestId) : null;
@@ -76,8 +67,6 @@ class MangaOcrClient {
     force = false
   ): Promise<void> {
     if (this._ready && !force) return;
-
-    this._progressListener = onProgress;
 
     await chrome.runtime.sendMessage({ type: "RIKAI_ENSURE_OFFSCREEN" });
 

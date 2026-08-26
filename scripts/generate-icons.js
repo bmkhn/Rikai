@@ -25,9 +25,14 @@ for (const size of SIZES) {
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext("2d");
 
-  // White background
+  // Transparent background
+  ctx.clearRect(0, 0, size, size);
+
+  // White circle
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.fill();
 
   // Font size — fill most of the icon
   const fontSize = Math.round(size * 0.78);

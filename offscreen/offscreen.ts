@@ -57,12 +57,6 @@ interface ImageRef {
         return true;
       }
 
-      if (type === "CANCEL_INIT") {
-        (window as any).RikaiMangaOcr?.cancelInit?.();
-        respond(sendResponse, requestId ?? null, { type: "CANCELLED" });
-        return true;
-      }
-
       if (type === "PROCESS_IMAGE") {
         const payload = message.payload || {};
         workChain = workChain
