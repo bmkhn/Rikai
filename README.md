@@ -1,147 +1,167 @@
 # Rikai
 
-Japanese manga OCR + translation, rendered directly on the page.
+Japanese manga OCR desktop app. Move a window over text on screen, get instant recognition.
 
 ## What is Rikai?
 
-Rikai is a Chrome extension that:
+Rikai is a desktop app that acts as a **screen OCR magnifier for Japanese text**:
 
-1. Scans manga pages for images
-2. Detects text regions (speech bubbles, captions) in each image
-3. Recognizes Japanese text via [MangaOCR](https://github.com/kha-white/manga-ocr) running locally in the browser (ONNX Runtime WASM)
-4. Translates Japanese → English via [MyMemory API](https://mymemory.translated.net/) (free, no key)
-5. Renders translation overlays pinned to the original text positions
-6. Continuously watches for new/lazy-loaded images and re-processes automatically
+1. A small, always-on-top frameless window sits on your screen
+2. Drag it over any manga text (browser, image viewer, desktop app — anything)
+3. The app captures the screen region behind the window
+4. Runs [MangaOCR](https://github.com/kha-white/manga-ocr) (kha-white/manga-ocr-base) on the captured image
+5. Displays the recognized Japanese text inside the window
+
+**No Chrome extension. No text detection pipeline. No ONNX conversion.** Just the original PyTorch model for maximum accuracy.
 
 ## Architecture
 
 ```
-rikai/
-├── manifest.json                 # Chrome Manifest V3
-├── package.json                  # npm dependencies
-├── tsconfig.json                 # TypeScript configuration
-├── background.ts                 # Service worker (state tracking, offscreen lifecycle)
-├── content/
-│   ├── content.ts                # Main content script (activation, pipeline orchestration)
-│   ├── image-extractor.ts        # Manga image discovery (img, picture, canvas, CSS bg)
-│   ├── ocr-pipeline.ts           # OCR client, cache, and work queue
-│   ├── overlay.ts                # In-page translation overlay (Shadow DOM)
-│   └── translator.ts             # MyMemory API translation
-├── offscreen/
-│   ├── offscreen.html            # Offscreen document host
-│   ├── offscreen.ts              # OCR orchestration (crop, detect, recognize)
-│   ├── offscreen-ocr-src.ts      # MangaOCR engine (ORT direct + Transformers.js tokenizer)
-│   └── text-detector.ts          # Connected-component text region detection
-├── popup/
-│   ├── popup.html                # Extension popup UI
-│   ├── popup.ts                  # Popup state management
-│   └── popup.css                 # Popup styles
-├── scripts/
-│   └── build.js                  # esbuild build script (TS → JS + ORT bundling)
-├── icons/
-│   ├── icon16.png
-│   ├── icon48.png
-│   └── icon128.png
-└── dist/                         # Build output (loaded by Chrome)
-    ├── manifest.json
-    ├── background.js
-    ├── offscreen-ocr.js          # Bundled OCR engine (~857 KB)
-    ├── ort-wasm-simd-threaded.jsep.wasm  # ONNX Runtime WASM binary (~21 MB)
-    ├── content/*.js
-    ├── offscreen/*.js
-    └── popup/*.js
+┌─────────────────────────────────────────────────┐
+│              Electron Desktop App                │
+│                                                  │
+│  ┌─────────────────────┐   ┌──────────────────┐ │
+│  │   Renderer Process  │   │  Main Process     │ │
+│  │                     │   │                   │ │
+│  │  - Frameless window │   │  - Screen capture │ │
+│  │  - Always-on-top    │◄─►│  - Python bridge  │ │
+│  │  - Text display     │   │  - manga-ocr      │ │
+│  │  - Hotkey handling  │   │    inference      │ │
+│  └─────────────────────┘   └──────────────────┘ │
+│                                                  │
+│  ┌─────────────────────────────────────────────┐ │
+│  │           Python Subprocess                  │ │
+│  │                                              │ │
+│  │  - manga_ocr.MangaOcr loaded in memory       │ │
+│  │  - Receives image bytes via stdin/HTTP       │ │
+│  │  - Returns recognized text                   │ │
+│  └─────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
 ```
 
-### How it works
+### Communication Flow
 
 ```
-User clicks ON in popup
-  → content/content.ts activates
-    → chrome.runtime → background.ts (ensures offscreen document exists)
-      → offscreen/offscreen.html loads
-        → offscreen-ocr-src.ts loads MangaOCR engine via ORT
-    → Content script starts pipeline:
-        scan images → visibility-prioritize → OCR → translate → overlay
-
-Per manga image:
-  1. Text detector finds likely text regions (speech bubbles)
-  2. Each region is cropped and sent to MangaOCR encoder + decoder
-  3. Recognized Japanese text is translated via MyMemory API
-  4. Translation overlay is pinned over the original text region
+1. User positions window over manga text
+2. Renderer captures screen region (via desktopCapturer or native API)
+3. Sends image bytes to Python subprocess (via stdin or local HTTP)
+4. Python runs manga-ocr inference (~50-100ms on GPU)
+5. Returns Japanese text to renderer
+6. Renderer displays text in the window
 ```
+
+### Window Modes
+
+| Mode | Window Appearance | Behavior |
+|---|---|---|
+| **Scanning** | Transparent frame only (border visible) | Captures what's behind it |
+| **Reading** | Frame + text overlay | Shows recognized text |
+
+Toggle between modes via hotkey (default: `Ctrl+Shift+O`).
 
 ## Tech Stack
 
 | Component | Technology |
 |---|---|
-| OCR Engine | [MangaOCR](https://github.com/kha-white/manga-ocr) (kha-white/manga-ocr-base) via [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/) (WASM) |
-| Tokenizer | [Transformers.js](https://huggingface.co/docs/transformers.js) AutoTokenizer from [NorwayFish/manga-ocr](https://huggingface.co/NorwayFish/manga-ocr) |
-| Image Processor | Transformers.js AutoImageProcessor |
-| Text Detection | Custom connected-component labeling (pure JS) |
-| Translation | [MyMemory API](https://mymemory.translated.net/) (free, no key) |
-| Language | TypeScript, compiled via [esbuild](https://esbuild.github.io/) |
-| Platform | Chrome Extension Manifest V3 |
+| Desktop Framework | [Electron](https://www.electronjs.org/) |
+| OCR Model | [kha-white/manga-ocr-base](https://github.com/kha-white/manga-ocr) (PyTorch) |
+| Python Runtime | Bundled via [PyInstaller](https://pyinstaller.org/) or [Nuitka](https://nuitka.net/) |
+| Screen Capture | Electron `desktopCapturer` + native APIs |
+| Language | TypeScript (Electron), Python (OCR) |
 
-### Why direct ORT instead of Transformers.js pipeline?
+## Project Status
 
-Transformers.js's `pipeline("image-to-text")` hardcodes `decoder_model_merged.onnx` as the decoder filename. The [onnx-community/manga-ocr-base-ONNX](https://huggingface.co/onnx-community/manga-ocr-base-ONNX) repo only has `decoder_model.onnx` (without "merged"). Rather than monkey-patching the library, the engine loads encoder + decoder directly via `ort.InferenceSession` and uses Transformers.js only for tokenizer and image processing.
+> **🚧 Early planning phase — no code written yet for the Electron app.**
+>
+> The previous Chrome extension prototype is in the git history but being replaced.
 
-## Setup
+---
 
-### Prerequisites
+## Development Plan
 
-- [Node.js](https://nodejs.org/) v18+
-- [Google Chrome](https://www.google.com/chrome/) 116+
+### Phase 1: Python OCR Server (Standalone)
 
-### Build
+**Goal:** Prove the Python model works and establish the inference interface.
 
+- [ ] Create a minimal Python script that loads `manga-ocr` and accepts images
+- [ ] Define the API contract (input: image bytes, output: text string)
+- [ ] Test accuracy on sample manga images
+- [ ] Measure inference speed (CPU vs GPU)
+
+**Deliverable:** A Python script you can run that OCRs an image and prints text.
+
+### Phase 2: Electron Shell
+
+**Goal:** Basic Electron app with screen capture and Python communication.
+
+- [ ] Scaffold Electron project (main process + renderer)
+- [ ] Create a frameless, always-on-top window
+- [ ] Implement screen capture of the region behind the window
+- [ ] Bridge Electron ↔ Python subprocess (stdin/stdout or local HTTP)
+- [ ] Display captured image and OCR result in the window
+
+**Deliverable:** An Electron app that captures screen regions and OCRs them via Python.
+
+### Phase 3: UX Polish
+
+**Goal:** Make it feel like a real product.
+
+- [ ] Scanning/Reading mode toggle (hotkey)
+- [ ] Transparent window in scanning mode (border only)
+- [ ] Text overlay styling in reading mode
+- [ ] System tray icon (show/hide window)
+- [ ] Auto-start option
+- [ ] Window remembers position across restarts
+
+**Deliverable:** A polished, usable desktop OCR tool.
+
+### Phase 4: Packaging & Distribution
+
+**Goal:** Ship it.
+
+- [ ] Bundle Python + manga-ocr via PyInstaller/Nuitka
+- [ ] Cross-platform builds (Windows, macOS, Linux)
+- [ ] Code signing (for macOS gatekeeper)
+- [ ] Auto-update mechanism
+- [ ] Installer (Electron Builder / electron-forge)
+
+**Deliverable:** Standalone installers for each platform (~200-400 MB).
+
+### Phase 5: Translation (Future)
+
+**Goal:** Add Japanese → English translation.
+
+- [ ] Choose translation approach (local model vs API)
+- [ ] Display translation alongside OCR text
+- [ ] Toggle translation on/off
+
+---
+
+## Where We Left Off
+
+**Date:** 2026-08-28
+
+**Last conversation:** Initial planning. We decided to:
+
+1. **Pivot from Chrome extension to Electron desktop app** — the original Chrome extension approach (ONNX in browser) had accuracy concerns with quantized models, and the Python model is the gold standard
+2. **Use the "scanner window" UX** — a movable always-on-top window that captures and OCRs whatever is behind it
+3. **OCR only for now** — translation will be added later (Phase 5)
+4. **Start with Phase 1** — a standalone Python script to prove accuracy before building the Electron shell
+
+**Key decisions made:**
+- Use `kha-white/manga-ocr-base` (original PyTorch model, not ONNX)
+- Python runs as a subprocess inside Electron (bundled via PyInstaller)
+- No Chrome extension — works with any app on screen
+- Frameless always-on-top window with hotkey toggle between scanning/reading modes
+
+**Next step:** Build the Phase 1 Python script — a minimal script that loads manga-ocr and OCRs a test image.
+
+**Test image:** `test.webp` (in repo root)
+
+**Python install needed:**
 ```bash
-# Install dependencies
-npm install
-
-# Build (compiles TS → JS, bundles OCR engine, copies assets)
-npm run build
-
-# Watch mode (rebuilds on file changes)
-npm run build:watch
+pip install manga-ocr
 ```
 
-### Load as Unpacked Extension
-
-1. Build the project (`npm run build`)
-2. Open `chrome://extensions/`
-3. Enable **Developer mode**
-4. Click **Load unpacked** → select the `dist/` folder
-5. Pin the extension to your toolbar
-
-### First Use
-
-The first time you activate Rikai on a page, it downloads the MangaOCR model (~460 MB) from HuggingFace. This is cached by the browser and only happens once. Subsequent activations load from cache.
-
-## Model Files
-
-The extension downloads two ONNX files at runtime from [onnx-community/manga-ocr-base-ONNX](https://huggingface.co/onnx-community/manga-ocr-base-ONNX):
-
-| File | Size | Purpose |
-|---|---|---|
-| `onnx/encoder_model.onnx` | 343 MB | ViT image encoder (fp32) |
-| `onnx/decoder_model.onnx` | 117 MB | BERT text decoder (fp32) |
-| **Total** | **460 MB** | Downloaded once, cached by browser |
-
-Tokenizer and image processor files are loaded from [NorwayFish/manga-ocr](https://huggingface.co/NorwayFish/manga-ocr) (~150 KB).
-
-## Performance
-
-The first activation is slow (model download + WASM initialization). After that, the model stays in memory and subsequent activations are fast.
-
-| Phase | First Time | Cached |
-|---|---|---|
-| Offscreen document creation | ~100–200 ms | ~100–200 ms |
-| Model download from HuggingFace | ~10–60 s | 0 |
-| Model load from Cache Storage | 0 | ~1–5 s |
-| WASM warm-up inference | ~1–3 s | Skipped |
-| **Total activation** | **~12–65 s** | **~1–5 s** |
-
-## License
-
-TBD
+**Test files:**
+- `test/test-manga-ocr.py` — Python manga-ocr test (relevant for Phase 1)

@@ -52,6 +52,16 @@ interface ImageRef {
 
       const { type, requestId } = message;
 
+      if (type === "IS_READY") {
+        const engine = (window as any).RikaiMangaOcr;
+        respond(sendResponse, requestId ?? null, {
+          type: "READY",
+          ready: !!engine?.isReady?.(),
+          loading: !!engine?.isLoading?.(),
+        });
+        return false;
+      }
+
       if (type === "INIT") {
         handleInit(requestId ?? 0, sendResponse);
         return true;
@@ -99,10 +109,12 @@ interface ImageRef {
     sendResponse: (response?: any) => void
   ): Promise<void> {
     const t0 = performance.now();
+    console.log(`[Rikai OCR] handleInit called (requestId=${requestId})`);
     try {
       if (!(window as any).RikaiMangaOcr) {
         throw new Error("MangaOCR bundle not loaded.");
       }
+      console.log("[Rikai OCR] Calling RikaiMangaOcr.init()…");
       await (window as any).RikaiMangaOcr.init((p: any) => {
         // Broadcast progress so background can write to storage for popup polling
         chrome.runtime

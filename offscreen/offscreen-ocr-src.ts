@@ -52,6 +52,7 @@ let imageProcessor: ProcessorType | null = null;
 let encoderSession: ort.InferenceSession | null = null;
 let decoderSession: ort.InferenceSession | null = null;
 let ready = false;
+let initPromise: Promise<boolean> | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -100,7 +101,11 @@ interface MangaOcrEngine {
 (window as any).RikaiMangaOcr = {
   async init(onProgress: (p: InitProgress) => void = () => {}): Promise<boolean> {
     if (ready) return true;
+    // If init is already in progress, piggyback on the existing load
+    // instead of starting a second parallel load (critical for low-RAM devices).
+    if (initPromise) return initPromise;
 
+    initPromise = (async () => {
     const t0 = performance.now();
 
     // Load tokenizer + image processor from NorwayFish (has tokenizer.json)
@@ -114,12 +119,14 @@ interface MangaOcrEngine {
     onProgress({ phase: "tokenizer", percent: 100 });
 
     // Load encoder and decoder ONNX models from cache
+    // Load sequentially to reduce peak memory (~460 MB vs ~920 MB parallel).
+    // Critical for low-end devices (e.g. i3, 8 GB RAM, integrated GPU).
     onProgress({ phase: "download", percent: 0 });
 
-    const [enc, dec] = await Promise.all([
-      loadOnnxSession("encoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/encoder_model.onnx`),
-      loadOnnxSession("decoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/decoder_model.onnx`),
-    ]);
+    const enc = await loadOnnxSession("encoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/encoder_model.onnx`);
+    onProgress({ phase: "download", percent: 50 });
+    const dec = await loadOnnxSession("decoder_model.onnx", `https://huggingface.co/onnx-community/manga-ocr-base-ONNX/resolve/main/onnx/decoder_model.onnx`);
+    onProgress({ phase: "download", percent: 100 });
 
     encoderSession = enc;
     decoderSession = dec;
@@ -141,10 +148,21 @@ interface MangaOcrEngine {
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
     console.log(`[Rikai OCR] Init complete in ${elapsed}s`);
     return true;
+    })();
+
+    try {
+      return await initPromise;
+    } finally {
+      initPromise = null;
+    }
   },
 
   isReady(): boolean {
     return ready;
+  },
+
+  isLoading(): boolean {
+    return initPromise !== null && !ready;
   },
 
   async recognize(imageDataUrl: string): Promise<string> {

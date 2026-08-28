@@ -71,10 +71,16 @@ async function init(): Promise<void> {
     }
     currentTabId = tab.id ?? null;
 
-    // Check model status
-    const modelStatus = await chrome.runtime
+    // Check model status — retry once if the service worker is still waking up
+    let modelStatus = await chrome.runtime
       .sendMessage({ type: "RIKAI_CHECK_MODEL_STATUS" })
-      .catch(() => ({ ready: false, files: {} }));
+      .catch(() => null);
+    if (!modelStatus) {
+      await new Promise((r) => setTimeout(r, 200));
+      modelStatus = await chrome.runtime
+        .sendMessage({ type: "RIKAI_CHECK_MODEL_STATUS" })
+        .catch(() => ({ ready: false, files: {} }));
+    }
     modelReady = !!modelStatus.ready;
 
     // Update per-file statuses from storage and apply to DOM
@@ -102,20 +108,32 @@ async function init(): Promise<void> {
 
     updateModelUI();
 
-    // Check tab state
-    const bgState = await chrome.runtime
+    // Check tab state — retry once on service worker cold start
+    let bgState = await chrome.runtime
       .sendMessage({ type: "RIKAI_GET_TAB_STATE" })
-      .catch(() => ({ state: "OFF" }));
+      .catch(() => null);
+    if (!bgState) {
+      await new Promise((r) => setTimeout(r, 200));
+      bgState = await chrome.runtime
+        .sendMessage({ type: "RIKAI_GET_TAB_STATE" })
+        .catch(() => ({ state: "OFF" }));
+    }
 
-    powerToggle.checked = bgState.state !== "OFF";
+    powerToggle.checked = bgState.state === "PROCESSING";
     await refreshFromTab();
 
-    // Auto-initialize engine if all files loaded but engine not ready
-    if (modelReady && !ocrFailed && bgState.state === "OFF") {
-      ocrInitializing = true;
-      powerToggle.disabled = true;
-      render("LOADING", null);
-      chrome.runtime.sendMessage({ type: "RIKAI_AUTO_INIT" }).catch(() => {});
+    // Auto-initialize engine regardless of current pipeline state
+    if (modelReady && !ocrFailed) {
+      if (bgState.state === "OFF" || bgState.state === "LOADING") {
+        ocrInitializing = true;
+        powerToggle.disabled = true;
+        render("LOADING", null);
+        chrome.runtime.sendMessage({ type: "RIKAI_AUTO_INIT" }).catch(() => {});
+      } else if (bgState.state === "READY" || bgState.state === "PROCESSING") {
+        // Engine already initialized on this tab
+        ocrInitializing = false;
+        powerToggle.disabled = false;
+      }
     }
 
     startPolling();
@@ -336,7 +354,6 @@ async function refreshFromTab(): Promise<void> {
 function syncToggle(phase: string): void {
   if (!modelReady) return;
 
-  // Handle auto-init completion
   if (ocrInitializing) {
     if (phase === "READY" || phase === "PROCESSING") {
       // Engine initialized successfully
@@ -349,14 +366,21 @@ function syncToggle(phase: string): void {
       powerToggle.disabled = true;
       powerToggle.checked = false;
     }
+    return;
   }
 
-  // Only sync toggle position when engine is ready and not initializing
-  if (!ocrInitializing && !ocrFailed) {
-    const shouldBeOn = phase !== "OFF" && phase !== "UNSUPPORTED";
+  if (ocrFailed) return;
+
+  // Sync toggle based on pipeline state
+  if (phase === "READY" || phase === "PROCESSING") {
+    powerToggle.disabled = false;
+    const shouldBeOn = phase === "PROCESSING";
     if (powerToggle.checked !== shouldBeOn) {
       powerToggle.checked = shouldBeOn;
     }
+  } else if (phase === "OFF" || phase === "LOADING") {
+    powerToggle.disabled = true;
+    powerToggle.checked = false;
   }
 }
 

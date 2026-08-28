@@ -43,21 +43,27 @@ interface ImageRef {
 
 class MangaOcrClient {
   private _pending: Map<number, (msg: OffscreenMessage) => void>;
+  private _timers: Map<number, ReturnType<typeof setTimeout>>;
   private _requestCounter: number;
   private _ready: boolean;
 
   constructor() {
     this._pending = new Map();
+    this._timers = new Map();
     this._requestCounter = 0;
     this._ready = false;
 
     chrome.runtime.onMessage.addListener((message: OffscreenMessage) => {
       if (!message || message.source !== "rikai-offscreen") return;
+      if (message.requestId == null) return;
 
-      const resolve =
-        message.requestId != null ? this._pending.get(message.requestId) : null;
+      const resolve = this._pending.get(message.requestId);
       if (!resolve) return;
-      if (message.requestId != null) this._pending.delete(message.requestId);
+      this._pending.delete(message.requestId);
+      // Clear any associated timeout timer
+      const timer = this._timers.get(message.requestId);
+      if (timer != null) clearTimeout(timer);
+      this._timers.delete(message.requestId);
       resolve(message);
     });
   }
@@ -90,10 +96,19 @@ class MangaOcrClient {
       return response.regions || [];
     }
 
-  private _request(type: string, payload: Record<string, any>): Promise<OffscreenMessage> {
+  private _request(type: string, payload: Record<string, any>, timeoutMs = 120_000): Promise<OffscreenMessage> {
     const requestId = ++this._requestCounter;
     return new Promise((resolve) => {
       this._pending.set(requestId, resolve);
+
+      const timer = setTimeout(() => {
+        this._pending.delete(requestId);
+        this._timers.delete(requestId);
+        console.error(`[Rikai OCR] Request ${requestId} (${type}) timed out after ${timeoutMs / 1000}s`);
+        resolve({ type: "ERROR", error: `OCR request '${type}' timed out after ${timeoutMs / 1000}s.` });
+      }, timeoutMs);
+      this._timers.set(requestId, timer);
+
       chrome.runtime
         .sendMessage({
           target: "rikai-offscreen",
@@ -102,6 +117,8 @@ class MangaOcrClient {
           payload: { ...payload, requestId },
         })
         .catch(() => {
+          clearTimeout(timer);
+          this._timers.delete(requestId);
           this._pending.delete(requestId);
           resolve({ type: "ERROR", error: "OCR engine unreachable." });
         });

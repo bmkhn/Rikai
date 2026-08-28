@@ -170,19 +170,24 @@ async function handleAutoInit(
   sendResponse: (response?: any) => void
 ): Promise<void> {
   try {
-    // Ensure offscreen document exists
+    console.log("[Rikai BG] Auto-init: ensuring offscreen document…");
     await ensureOffscreenDocument();
+    console.log("[Rikai BG] Auto-init: offscreen document ready");
 
     // Find active tab and forward auto-init to its content script
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || typeof tab.id !== "number") {
+      console.warn("[Rikai BG] Auto-init: no active tab found");
       sendResponse({ ok: false, error: "No active tab" });
       return;
     }
 
+    console.log(`[Rikai BG] Auto-init: sending RIKAI_AUTO_INIT to tab ${tab.id}`);
     await chrome.tabs.sendMessage(tab.id, { type: "RIKAI_AUTO_INIT" });
+    console.log("[Rikai BG] Auto-init: message sent to content script");
     sendResponse({ ok: true });
   } catch (err) {
+    console.error("[Rikai BG] Auto-init failed:", err);
     sendResponse({ ok: false, error: String(err) });
   }
 }
@@ -211,10 +216,6 @@ chrome.tabs.onRemoved.addListener((tabId: number) => {
   tabStates.delete(tabId);
 });
 
-chrome.tabs.onUpdated.addListener(
-  (tabId: number, changeInfo: { status?: string }) => {
-    if (changeInfo.status === "loading") {
-      tabStates.delete(tabId);
-    }
-  }
-);
+// NOTE: Do NOT delete tab state on navigation — the toggle state must
+// survive page changes so the new content script can auto-start the pipeline.
+// Tab state is only cleaned up when the tab is closed.

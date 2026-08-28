@@ -59,6 +59,7 @@ interface InitProgress {
 
   let watchIntervalId: ReturnType<typeof setInterval> | null = null;
   let currentUrl = location.href;
+  let engineReady = false;
 
   // ─── Messaging from popup ────────────────────────────────────────────
 
@@ -66,10 +67,16 @@ interface InitProgress {
     (message: any, _sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
       switch (message?.type) {
         case "RIKAI_ACTIVATE":
-        case "RIKAI_AUTO_INIT":
           activate().catch((err: Error) => {
             console.error("[Rikai] Activation failed:", err);
             setError("ACTIVATION FAILED", String(err?.message || err));
+          });
+          sendResponse({ ok: true });
+          return false;
+
+        case "RIKAI_AUTO_INIT":
+          initEngine().catch((err: Error) => {
+            console.error("[Rikai] Auto-init failed:", err);
           });
           sendResponse({ ok: true });
           return false;
@@ -117,71 +124,150 @@ interface InitProgress {
     });
   }
 
-  // ─── Activation lifecycle ────────────────────────────────────────────
+  // ─── Engine initialization (runs regardless of toggle state) ────
+  // The OCR model lives in the offscreen document and persists across pages.
+  // We check IS_READY first so pages that load after the model is already
+  // warm skip the LOADING phase entirely — no flicker in the popup.
 
-  async function activate(): Promise<void> {
-    if (
-      state.phase === "LOADING" ||
-      state.phase === "READY" ||
-      state.phase === "PROCESSING"
-    ) {
-      return;
+  async function initEngine(): Promise<void> {
+    if (engineReady) return;
+    if (state.phase === "LOADING") return; // already in progress
+
+    // Check if model files are available in storage
+    try {
+      const result = await chrome.storage.local.get(["rikaiModelReady"]);
+      if (!result.rikaiModelReady) {
+        console.log("[Rikai] Model files not downloaded yet, skipping engine init.");
+        return;
+      }
+    } catch {
+      // storage unavailable — try anyway
     }
 
-    const t0 = performance.now();
-    console.log("[Rikai] Activating…");
+    // Fast path: ask the offscreen document if the model is already loaded.
+    try {
+      await chrome.runtime.sendMessage({ type: "RIKAI_ENSURE_OFFSCREEN" });
+      const res = await chrome.runtime.sendMessage({
+        target: "rikai-offscreen",
+        type: "IS_READY",
+        requestId: 0,
+      });
+      if (res?.ready) {
+        engineReady = true;
+        setPhase("READY");
+        showEngineReadyNotification();
+        console.log("[Rikai] Engine already loaded in offscreen — ready immediately.");
+        return;
+      }
+      if (res?.loading) {
+        console.log("[Rikai] Engine is loading in offscreen — waiting…");
+        setPhase("LOADING");
+        // ocr.initialize() will piggyback on the existing offscreen load
+      }
+    } catch {
+      // offscreen not reachable — fall through to full init
+    }
 
-    overlay.activate();
-    setPhase("LOADING");
-    overlay.setStatus({
-      tone: "loading",
-      title: "LOADING OCR ENGINE",
-      detail: "Japanese MangaOCR",
-      indeterminate: true,
-    });
+    // Slow path: model needs to be loaded from cache/network.
+    // If already loading in offscreen, ocr.initialize() will wait on the
+    // existing initPromise instead of starting a second parallel load.
+    const t0 = performance.now();
+    console.log("[Rikai] Initializing OCR engine in background…");
+    if (state.phase !== "LOADING") setPhase("LOADING");
 
     try {
-      await ocr.initialize((p: InitProgress) => {
-        if (p.phase === "warmup") {
-          overlay.setStatus({
-            tone: "loading",
-            title: "CALIBRATING ENGINE",
-            detail: "Preparing the recognizer — one moment",
-            indeterminate: true,
-          });
-          return;
-        }
-        if (p.percent != null) {
-          overlay.setStatus({
-            tone: "loading",
-            title: "LOADING OCR ENGINE",
-            detail: "Japanese MangaOCR",
-            percent: p.percent,
-          });
-        }
+      await ocr.initialize((_p: InitProgress) => {
+        // Progress is forwarded to background via STATE_UPDATE
       });
 
+      engineReady = true;
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-      console.log(`[Rikai] Activation complete in ${elapsed}s`);
+      console.log(`[Rikai] Engine initialized in ${elapsed}s`);
       setPhase("READY");
-      overlay.setStatus({ tone: "success", title: "SYSTEM READY" });
-      setTimeout(() => {
-        if (state.phase !== "ERROR") overlay.hideStatus();
-      }, 1200);
-
-      startPipeline();
+      showEngineReadyNotification();
     } catch (err: any) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-      console.error(`[Rikai] OCR init failed after ${elapsed}s:`, err);
-      setError(
-        "OCR INITIALIZATION FAILED",
-        "Unable to load the Japanese OCR model."
-      );
+      console.error(`[Rikai] Engine init failed after ${elapsed}s:`, err);
+      setPhase("ERROR", String(err?.message || err));
     }
   }
 
+  // ─── In-page notification ─────────────────────────────────────────
+  // Lightweight toast that appears once when the engine becomes ready.
+  // Popup already shows the loading state — this just confirms on the page.
+
+  function showEngineReadyNotification(): void {
+    try {
+      const el = document.createElement("div");
+      el.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+          <circle cx="8" cy="8" r="7" stroke="#22d3ee" stroke-width="1.5"/>
+          <path d="M5 8.5 7 10.5 11 6" stroke="#34d399" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span style="font-weight:700;color:#22d3ee">RIKAI</span>
+        <span style="color:#7c89a6;margin:0 4px">—</span>
+        <span style="color:#34d399">Engine ready</span>
+      `;
+      Object.assign(el.style, {
+        position: "fixed",
+        bottom: "16px",
+        right: "16px",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "8px 14px",
+        background: "rgba(11, 17, 32, 0.92)",
+        border: "1px solid rgba(94, 234, 212, 0.28)",
+        borderRadius: "8px",
+        color: "#e6edf7",
+        fontSize: "12px",
+        fontFamily: '"Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif',
+        letterSpacing: "0.08em",
+        zIndex: "2147483000",
+        opacity: "0",
+        transition: "opacity 300ms ease",
+        pointerEvents: "none",
+        boxShadow: "0 0 12px rgba(34, 211, 238, 0.22)",
+      });
+      document.documentElement.appendChild(el);
+      requestAnimationFrame(() => { el.style.opacity = "1"; });
+      setTimeout(() => {
+        el.style.opacity = "0";
+        setTimeout(() => el.remove(), 350);
+      }, 2500);
+    } catch {
+      // non-critical — ignore
+    }
+  }
+
+  // ─── Activation lifecycle ────────────────────────────────────────────
+
+  async function activate(): Promise<void> {
+    if (state.phase === "PROCESSING") return; // pipeline already running
+    if (state.phase === "LOADING") return;    // engine still loading
+
+    // Ensure the engine is initialized first
+    if (!engineReady) {
+      await initEngine();
+      if (!engineReady) {
+        setError(
+          "INITIALIZATION FAILED",
+          "OCR engine could not be initialized."
+        );
+        return;
+      }
+    }
+
+    console.log("[Rikai] Activating pipeline…");
+
+    overlay.activate();
+    setPhase("READY");
+    startPipeline();
+    console.log("[Rikai] Pipeline activated.");
+  }
+
   function deactivate(): void {
-    console.log("[Rikai] Deactivating.");
+    console.log("[Rikai] Deactivating pipeline.");
     queue.cancel();
     stopWatching();
     extractor.disconnect();
@@ -189,7 +275,8 @@ interface InitProgress {
     overlay.deactivate();
     overlay.hideStatus();
     seenImages.clear();
-    setPhase("OFF");
+    // Keep engine loaded — just stop the pipeline
+    setPhase(engineReady ? "READY" : "OFF");
   }
 
   // ─── Processing pipeline ─────────────────────────────────────────────
@@ -380,5 +467,25 @@ interface InitProgress {
     overlay.deactivate();
   });
 
-  console.log("[Rikai] Content script loaded — waiting for activation.");
+  // ─── Auto-initialize engine on load (independent of toggle) ────
+  // After the engine is ready, check if the toggle was on before navigation
+  // and auto-start the pipeline so the translator state persists per-tab.
+  console.log("[Rikai] Content script loaded — auto-initializing engine…");
+  initEngine()
+    .then(() => {
+      chrome.runtime
+        .sendMessage({ type: "RIKAI_GET_TAB_STATE" })
+        .then((tabState: any) => {
+          if (tabState?.state === "PROCESSING") {
+            console.log("[Rikai] Toggle was on — auto-starting pipeline.");
+            activate().catch((err: Error) => {
+              console.error("[Rikai] Auto-activate failed:", err);
+            });
+          }
+        })
+        .catch(() => {});
+    })
+    .catch((err) => {
+      console.warn("[Rikai] Auto-init failed:", err);
+    });
 })();
