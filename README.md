@@ -69,9 +69,25 @@ Toggle between modes via hotkey (default: `Ctrl+Shift+O`).
 | Screen Capture | Electron `desktopCapturer` + native APIs |
 | Language | TypeScript (Electron), Python (OCR) |
 
+## Quick Start (Phase 1)
+
+```bash
+# Install Python dependencies
+pip install -r server/requirements.txt
+
+# Start the OCR server
+python server/ocr_server.py
+
+# Test it (in another terminal)
+python test/test-manga-ocr.py --server test.webp
+
+# Or test standalone (no server needed)
+python test/test-manga-ocr.py test.webp
+```
+
 ## Project Status
 
-> **🚧 Early planning phase — no code written yet for the Electron app.**
+> **🚧 Phase 1 in progress — Python OCR server built, testing accuracy.**
 >
 > The previous Chrome extension prototype is in the git history but being replaced.
 
@@ -83,12 +99,12 @@ Toggle between modes via hotkey (default: `Ctrl+Shift+O`).
 
 **Goal:** Prove the Python model works and establish the inference interface.
 
-- [ ] Create a minimal Python script that loads `manga-ocr` and accepts images
-- [ ] Define the API contract (input: image bytes, output: text string)
+- [x] Create a minimal Python script that loads `manga-ocr` and accepts images
+- [x] Define the API contract (input: image bytes, output: text string)
 - [ ] Test accuracy on sample manga images
 - [ ] Measure inference speed (CPU vs GPU)
 
-**Deliverable:** A Python script you can run that OCRs an image and prints text.
+**Deliverable:** `server/ocr_server.py` — run it, POST an image to `http://127.0.0.1:54321/ocr`, get text back.
 
 ### Phase 2: Electron Shell
 
@@ -154,7 +170,7 @@ Toggle between modes via hotkey (default: `Ctrl+Shift+O`).
 - No Chrome extension — works with any app on screen
 - Frameless always-on-top window with hotkey toggle between scanning/reading modes
 
-**Next step:** Build the Phase 1 Python script — a minimal script that loads manga-ocr and OCRs a test image.
+**Next step:** Test the Phase 1 server — run `python server/ocr_server.py`, POST `test.webp` to it, verify accuracy.
 
 **Test image:** `test.webp` (in repo root)
 
