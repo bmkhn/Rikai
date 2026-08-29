@@ -18,6 +18,11 @@ import sys
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+# Fix Windows console encoding for UTF-8 output
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # ── Model (loaded once at startup) ──────────────────────────────────
 
 mocr = None
@@ -25,7 +30,7 @@ mocr = None
 def load_model():
     global mocr
     t0 = time.time()
-    print("Loading manga-ocr model …")
+    print("Loading manga-ocr model...")
     from manga_ocr import MangaOcr
     mocr = MangaOcr()
     elapsed = time.time() - t0
@@ -99,7 +104,7 @@ def main():
 
     server = HTTPServer(("127.0.0.1", args.port), OcrHandler)
     print(f"\n  Rikai OCR server running at:")
-    print(f"  → http://127.0.0.1:{args.port}/ocr\n")
+    print(f"  -> http://127.0.0.1:{args.port}/ocr\n")
     print(f"  POST an image to get recognized text.\n")
 
     try:

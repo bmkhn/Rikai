@@ -16,6 +16,11 @@ import sys
 import time
 from pathlib import Path
 
+# Fix Windows console encoding for UTF-8 output
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def test_standalone(image_path: Path):
     """Load model directly and OCR the image."""

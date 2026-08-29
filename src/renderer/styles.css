@@ -1,0 +1,343 @@
+/* ── Reset ─────────────────────────────────────────────────────── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI', 'Noto Sans JP', 'Hiragino Sans', sans-serif;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+/* ── Scanning Mode ────────────────────────────────────────────── */
+
+body.mode-scanning {
+  background: transparent;
+}
+
+#scan-frame {
+  width: 100%;
+  height: 100%;
+  border: 1.5px solid rgba(80, 200, 255, 0.45);
+  border-radius: 6px;
+  position: relative;
+  background: rgba(80, 200, 255, 0.04);
+  cursor: crosshair;
+  transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
+}
+
+#scan-frame:hover {
+  border-color: rgba(80, 200, 255, 0.7);
+  background: rgba(80, 200, 255, 0.07);
+  box-shadow: 0 0 20px rgba(80, 200, 255, 0.12), inset 0 0 20px rgba(80, 200, 255, 0.04);
+}
+
+/* ── Corner Accents ───────────────────────────────────────────── */
+
+#scan-frame::before,
+#scan-frame::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-color: rgba(80, 200, 255, 0.8);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+  transition: border-color 0.3s;
+}
+
+/* Top-left corner */
+#scan-frame::before {
+  top: -1px;
+  left: -1px;
+  border-top-width: 2.5px;
+  border-left-width: 2.5px;
+  border-top-left-radius: 6px;
+}
+
+/* Bottom-right corner */
+#scan-frame::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom-width: 2.5px;
+  border-right-width: 2.5px;
+  border-bottom-right-radius: 6px;
+}
+
+#scan-frame:hover::before,
+#scan-frame:hover::after {
+  border-color: rgba(80, 200, 255, 1);
+}
+
+/* Extra corners via inner spans */
+.corner-tr,
+.corner-bl {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-color: rgba(80, 200, 255, 0.8);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+  transition: border-color 0.3s;
+}
+
+.corner-tr {
+  top: -1px;
+  right: -1px;
+  border-top-width: 2.5px;
+  border-right-width: 2.5px;
+  border-top-right-radius: 6px;
+}
+
+.corner-bl {
+  bottom: -1px;
+  left: -1px;
+  border-bottom-width: 2.5px;
+  border-left-width: 2.5px;
+  border-bottom-left-radius: 6px;
+}
+
+#scan-frame:hover .corner-tr,
+#scan-frame:hover .corner-bl {
+  border-color: rgba(80, 200, 255, 1);
+}
+
+/* ── Capture Pulse Animation ──────────────────────────────────── */
+
+@keyframes capture-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(80, 200, 255, 0.5); }
+  70%  { box-shadow: 0 0 0 12px rgba(80, 200, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(80, 200, 255, 0); }
+}
+
+#scan-frame.capturing {
+  border-color: rgba(255, 200, 50, 0.8);
+  animation: capture-pulse 0.8s ease-out;
+}
+
+/* ── Drag Handle (top edge, subtle) ───────────────────────────── */
+
+#drag-handle {
+  position: absolute;
+  top: 0;
+  left: 40px;
+  right: 40px;
+  height: 6px;
+  cursor: grab;
+  z-index: 10;
+}
+
+#drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ── Status Bar ───────────────────────────────────────────────── */
+
+#status-bar {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  background: rgba(12, 12, 20, 0.82);
+  backdrop-filter: blur(8px);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#status-icon {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.dot-red {
+  background: #ff4444;
+  box-shadow: 0 0 6px rgba(255, 68, 68, 0.6);
+}
+
+.dot-green {
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+}
+
+.dot-yellow {
+  background: #fbbf24;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
+}
+
+.dot-blue {
+  background: #60a5fa;
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.6);
+}
+
+#status-text {
+  flex: 1;
+}
+
+#mode-toggle {
+  cursor: pointer;
+  font-size: 13px;
+  -webkit-app-region: no-drag;
+  opacity: 0.5;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+#mode-toggle:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+
+/* ── Reading Mode ─────────────────────────────────────────────── */
+
+body.mode-reading {
+  background: rgba(10, 10, 18, 0.92);
+}
+
+body.mode-reading #scan-frame {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: transparent;
+  box-shadow: 0 0 24px rgba(52, 211, 153, 0.08);
+}
+
+body.mode-reading #scan-frame::before,
+body.mode-reading #scan-frame::after {
+  border-color: rgba(52, 211, 153, 0.7);
+}
+
+body.mode-reading .corner-tr,
+body.mode-reading .corner-bl {
+  border-color: rgba(52, 211, 153, 0.7);
+}
+
+#reading-overlay {
+  position: absolute;
+  top: 36px;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+#ocr-text {
+  font-size: 20px;
+  line-height: 1.7;
+  color: #f0f0f0;
+  text-align: center;
+  word-break: break-word;
+  white-space: pre-wrap;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  font-weight: 400;
+}
+
+#ocr-meta {
+  position: absolute;
+  bottom: 2px;
+  right: 8px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Hint Text (when no text captured yet) ────────────────────── */
+
+#ocr-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.25);
+  text-align: center;
+}
+
+/* ── Capture Preview ──────────────────────────────────────────── */
+
+#capture-preview {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+#preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+/* ── Utilities ────────────────────────────────────────────────── */
+
+.hidden {
+  display: none !important;
+}
+
+/* ── Spinner for loading state ────────────────────────────────── */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading #status-text::after {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(251, 191, 36, 0.3);
+  border-top-color: rgba(251, 191, 36, 0.9);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* ── Window Resize Handle (bottom-right) ──────────────────────── */
+
+#resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 10;
+}
+
+#resize-handle::before {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid rgba(80, 200, 255, 0.3);
+  border-bottom: 1.5px solid rgba(80, 200, 255, 0.3);
+  transition: border-color 0.3s;
+}
+
+#resize-handle:hover::before {
+  border-color: rgba(80, 200, 255, 0.7);
+}

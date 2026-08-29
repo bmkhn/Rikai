@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';">
+  <title>Rikai</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="mode-scanning">
+  <!-- Scanning mode: border frame + status -->
+  <div id="scan-frame">
+    <!-- Extra corner accents (top-right, bottom-left) -->
+    <span class="corner-tr"></span>
+    <span class="corner-bl"></span>
+
+    <!-- Invisible drag handle along the top edge -->
+    <div id="drag-handle"></div>
+
+    <div id="status-bar">
+      <span id="status-icon" class="dot dot-red"></span>
+      <span id="status-text">Initializing...</span>
+      <span id="mode-toggle" title="Toggle reading mode">📖</span>
+    </div>
+  </div>
+
+  <!-- Reading mode: text overlay -->
+  <div id="reading-overlay" class="hidden">
+    <div id="ocr-text"></div>
+    <div id="ocr-hint">Click anywhere to scan again</div>
+    <div id="ocr-meta"></div>
+  </div>
+
+  <!-- Captured image preview (shown briefly during capture) -->
+  <div id="capture-preview" class="hidden">
+    <img id="preview-img" alt="captured region">
+  </div>
+
+  <!-- Bottom-right resize handle -->
+  <div id="resize-handle"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
