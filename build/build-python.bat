@@ -1,13 +1,13 @@
 @echo off
 REM ── Build Python OCR Server for Rikai ──────────────────────────────
 REM
-REM This bundles ocr_server.py + manga-ocr + PyTorch into a single
-REM executable that Electron can launch in production mode.
+REM This bundles ocr_server.py + manga-ocr + PyTorch into a directory
+REM with a standalone executable that Electron can launch in production mode.
 REM
 REM Usage:
 REM     build\build-python.bat
 REM
-REM Output: build\dist\ocr_server\ocr_server.exe
+REM Output: build\dist\ocr_server\ (ocr_server.exe + _internal/)
 
 echo.
 echo ========================================
@@ -35,7 +35,7 @@ echo.
 
 python -m PyInstaller ^
     --name ocr_server ^
-    --onefile ^
+    --onedir ^
     --noconfirm ^
     --clean ^
     --hidden-import=manga_ocr ^
@@ -62,6 +62,6 @@ if %ERRORLEVEL% neq 0 (
 echo.
 echo ========================================
 echo  Build complete!
-echo  Output: build\dist\ocr_server\ocr_server.exe
+echo  Output: build\dist\ocr_server\ocr_server.exe + _internal/
 echo ========================================
 echo.

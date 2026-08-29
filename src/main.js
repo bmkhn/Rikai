@@ -229,18 +229,27 @@ async function captureScreenRegion(bounds) {
   }
 
   const thumbnail = source.thumbnail;
-  const scaleFactor = targetDisplay.scaleFactor;
+  const thumbSize = thumbnail.getSize();
 
+  // Calculate the ratio between thumbnail pixels and actual screen pixels
+  // desktopCapturer scales the screen to fit thumbnailSize, so we need
+  // the ratio of thumbnail dimensions to actual screen dimensions.
+  const screenW = targetDisplay.bounds.width;
+  const screenH = targetDisplay.bounds.height;
+  const ratioX = thumbSize.width / screenW;
+  const ratioY = thumbSize.height / screenH;
+
+  // Window bounds relative to this display's origin
   const offsetX = bounds.x - targetDisplay.bounds.x;
   const offsetY = bounds.y - targetDisplay.bounds.y;
 
-  const cropX = Math.max(0, Math.round(offsetX * scaleFactor));
-  const cropY = Math.max(0, Math.round(offsetY * scaleFactor));
-  const cropWidth = Math.round(bounds.width * scaleFactor);
-  const cropHeight = Math.round(bounds.height * scaleFactor);
+  const cropX = Math.max(0, Math.round(offsetX * ratioX));
+  const cropY = Math.max(0, Math.round(offsetY * ratioY));
+  const cropWidth = Math.round(bounds.width * ratioX);
+  const cropHeight = Math.round(bounds.height * ratioY);
 
-  const safeW = Math.min(cropWidth, thumbnail.getSize().width - cropX);
-  const safeH = Math.min(cropHeight, thumbnail.getSize().height - cropY);
+  const safeW = Math.min(cropWidth, thumbSize.width - cropX);
+  const safeH = Math.min(cropHeight, thumbSize.height - cropY);
 
   const cropped = thumbnail.crop({
     x: cropX,
@@ -270,6 +279,7 @@ function setupIPC() {
 
       return {
         text: result.text || '',
+        image: imageBase64,
         time_ms: Date.now() - startTime,
         ocr_time_ms: result.time_ms || 0,
       };
@@ -343,13 +353,16 @@ function setupIPC() {
 // ── System Tray ──────────────────────────────────────────────────
 
 function createTray() {
-  const iconDir = isDev
-    ? path.join(__dirname, '..', 'icons')
-    : process.resourcesPath;
-
-  let iconPath = path.join(iconDir, 'icon16.png');
-  if (!fs.existsSync(iconPath)) {
+  let iconPath;
+  if (isDev) {
     iconPath = path.join(__dirname, '..', 'icons', 'icon16.png');
+  } else {
+    // In production, icon16.png is in extraResources
+    iconPath = path.join(process.resourcesPath, 'icon16.png');
+    if (!fs.existsSync(iconPath)) {
+      // Fallback: check original dev path (works if running unpacked)
+      iconPath = path.join(__dirname, '..', 'icons', 'icon16.png');
+    }
   }
 
   const icon = nativeImage.createFromPath(iconPath);
@@ -406,12 +419,12 @@ function createWindow() {
 
   const display = screen.getPrimaryDisplay();
   const { width: screenW, height: screenH } = display.workAreaSize;
-  const defaultX = Math.round((screenW - 400) / 2);
-  const defaultY = Math.round((screenH - 200) / 2);
+  const defaultX = Math.round((screenW - 260) / 2);
+  const defaultY = Math.round((screenH - 160) / 2);
 
   mainWindow = new BrowserWindow({
-    width: (bounds && bounds.width) || 400,
-    height: (bounds && bounds.height) || 200,
+    width: (bounds && bounds.width) || 260,
+    height: (bounds && bounds.height) || 160,
     x: (bounds && bounds.x) || defaultX,
     y: (bounds && bounds.y) || defaultY,
     frame: false,

@@ -89,7 +89,7 @@ class OcrHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         # Quiet logs: only log errors, not every request
-        if args and "4" in str(args[0])[:1] or "5" in str(args[0])[:1]:
+        if args and ("4" in str(args[0])[:1] or "5" in str(args[0])[:1]):
             super().log_message(format, *args)
 
 

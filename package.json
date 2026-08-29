@@ -33,6 +33,10 @@
         "from": "build/dist/ocr_server",
         "to": "ocr_server",
         "filter": ["**/*"]
+      },
+      {
+        "from": "icons/icon16.png",
+        "to": "icon16.png"
       }
     ],
     "win": {

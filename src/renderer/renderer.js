@@ -67,12 +67,22 @@ async function captureAndOcr() {
   try {
     const result = await window.rikai.captureAndOcr();
 
+    // Show capture preview briefly so user can see what was captured
+    if (result.image) {
+      previewImg.src = `data:image/png;base64,${result.image}`;
+      capturePreview.classList.remove('hidden');
+    }
+
     if (result.error) {
       setStatus('Error', 'dot-red');
       ocrText.textContent = result.error;
       ocrHint.classList.add('hidden');
       ocrMeta.textContent = '';
-      setMode('reading');
+      // Hide preview after a moment, then show reading mode
+      setTimeout(() => {
+        capturePreview.classList.add('hidden');
+        setMode('reading');
+      }, 400);
       console.error('OCR error:', result.error);
     } else if (result.text) {
       lastOcrText = result.text;
@@ -80,18 +90,25 @@ async function captureAndOcr() {
       ocrHint.classList.add('hidden');
       ocrMeta.textContent = `${result.ocr_time_ms || result.time_ms || '?'}ms`;
       setStatus('Text found', 'dot-green');
-      setMode('reading');
+      // Hide preview after a moment, then show reading mode
+      setTimeout(() => {
+        capturePreview.classList.add('hidden');
+        setMode('reading');
+      }, 400);
     } else {
       setStatus('No text detected', 'dot-red');
+      // Hide preview quickly for empty results
       setTimeout(() => {
+        capturePreview.classList.add('hidden');
         if (!isProcessing) setStatus('Ready', 'dot-green');
-      }, 2000);
+      }, 600);
     }
   } catch (err) {
     setStatus('Error', 'dot-red');
     ocrText.textContent = err.message;
     ocrHint.classList.add('hidden');
     ocrMeta.textContent = '';
+    capturePreview.classList.add('hidden');
     setMode('reading');
     console.error('Capture error:', err);
   } finally {
@@ -256,25 +273,29 @@ document.addEventListener('keydown', (e) => {
 // ── Init ─────────────────────────────────────────────────────────
 
 async function init() {
+  setMode('scanning');
+
   // Check if OCR server is running
   const serverStatus = await window.rikai.checkServer();
   if (serverStatus.running) {
     setStatus('Ready', 'dot-green');
-  } else {
-    setStatus('Waiting for server...', 'dot-yellow');
-    // Retry check after a few seconds
-    const retry = async () => {
+    return;
+  }
+
+  // Server not ready yet — model is loading (takes ~80s on CPU)
+  setStatus('Loading model...', 'dot-yellow');
+
+  const retry = async () => {
+    try {
       const check = await window.rikai.checkServer();
       if (check.running) {
         setStatus('Ready', 'dot-green');
-      } else {
-        setTimeout(retry, 2000);
+        return;
       }
-    };
-    setTimeout(retry, 2000);
-  }
-
-  setMode('scanning');
+    } catch {}
+    setTimeout(retry, 3000);
+  };
+  setTimeout(retry, 3000);
 }
 
 init();
