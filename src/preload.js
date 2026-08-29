@@ -1,25 +1,30 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('rikai', {
-  // Capture screen behind window and OCR it
+  // ── Scan Window Control ──────────────────────────────────────
+  openScanWindow: () => ipcRenderer.invoke('open-scan-window'),
+  closeScanWindow: () => ipcRenderer.invoke('close-scan-window'),
+
+  // ── Scan Capture (used by scan window) ───────────────────────
   captureAndOcr: () => ipcRenderer.invoke('capture-and-ocr'),
 
-  // Window controls
+  // ── Window Controls ──────────────────────────────────────────
   getBounds: () => ipcRenderer.invoke('get-bounds'),
-  resizeWindow: (width, height) => ipcRenderer.invoke('resize-window', width, height),
   moveWindow: (x, y) => ipcRenderer.invoke('move-window', x, y),
 
-  // Check if Python OCR server is running
+  // ── Server Status ────────────────────────────────────────────
   checkServer: () => ipcRenderer.invoke('check-server'),
 
-  // Config persistence
-  saveConfig: (data) => ipcRenderer.invoke('save-config', data),
-  loadConfig: () => ipcRenderer.invoke('load-config'),
-
-  // Multi-monitor info
-  getDisplays: () => ipcRenderer.invoke('get-displays'),
-
-  // Listen for capture trigger from main process (global shortcut)
+  // ── Events ───────────────────────────────────────────────────
+  // OCR result relayed from scan window to main window
+  onOcrResult: (callback) => {
+    ipcRenderer.on('ocr-result', (_event, result) => callback(result));
+  },
+  // Scan window was closed
+  onScanWindowClosed: (callback) => {
+    ipcRenderer.on('scan-window-closed', () => callback());
+  },
+  // Trigger capture (global shortcut)
   onTriggerCapture: (callback) => {
     ipcRenderer.on('trigger-capture', () => callback());
   },

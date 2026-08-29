@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';">
+  <title>Rikai</title>
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <div id="app">
+    <div id="header">
+      <div id="logo">Rikai</div>
+      <div id="status-badge">
+        <span id="status-dot" class="dot dot-red"></span>
+        <span id="status-label">Loading...</span>
+      </div>
+    </div>
+
+    <div id="result-area">
+      <div id="result-placeholder">
+        <div id="placeholder-icon">🔍</div>
+        <div id="placeholder-text">Position the scan window over manga text,<br>then click to capture</div>
+      </div>
+      <div id="result-text" class="hidden"></div>
+      <div id="result-meta" class="hidden"></div>
+    </div>
+
+    <div id="controls">
+      <button id="btn-scan" class="btn btn-primary" disabled>
+        <span id="btn-scan-icon">◎</span>
+        <span id="btn-scan-label">Scan</span>
+      </button>
+      <button id="btn-copy" class="btn btn-secondary" disabled>
+        Copy
+      </button>
+    </div>
+
+    <div id="history" class="hidden">
+      <div id="history-header">
+        <span>History</span>
+        <button id="btn-clear-history" class="btn-link">Clear</button>
+      </div>
+      <div id="history-list"></div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

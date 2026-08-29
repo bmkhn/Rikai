@@ -17,6 +17,7 @@ const fs = require('fs');
 // ── State ────────────────────────────────────────────────────────
 
 let mainWindow = null;
+let scanWindow = null;
 let pythonProcess = null;
 let tray = null;
 let isCapturing = false;
@@ -49,39 +50,26 @@ function saveConfig(data) {
 
 // ── Python Subprocess Management ─────────────────────────────────
 
-/**
- * Resolve the Python interpreter path.
- * Dev: uses venv if available, falls back to system python
- * Prod: uses the PyInstaller-bundled exe from extraResources
- */
 function getPythonServerCommand() {
   if (isDev) {
     const projectRoot = path.join(__dirname, '..');
-
-    // Try venv first (Windows, then Unix)
     const venvWin = path.join(projectRoot, 'venv', 'Scripts', 'python.exe');
     const venvUnix = path.join(projectRoot, 'venv', 'bin', 'python');
 
     let pythonCmd = 'python';
-    if (fs.existsSync(venvWin)) {
-      pythonCmd = venvWin;
-    } else if (fs.existsSync(venvUnix)) {
-      pythonCmd = venvUnix;
-    }
+    if (fs.existsSync(venvWin)) pythonCmd = venvWin;
+    else if (fs.existsSync(venvUnix)) pythonCmd = venvUnix;
 
     const serverPath = path.join(projectRoot, 'server', 'ocr_server.py');
     console.log(`Dev mode: using ${pythonCmd === 'python' ? 'system' : 'venv'} Python`);
     return { cmd: pythonCmd, args: [serverPath] };
   }
 
-  // Production: bundled PyInstaller exe
   const ocrExe = path.join(process.resourcesPath, 'ocr_server', 'ocr_server.exe');
-
   if (fs.existsSync(ocrExe)) {
     return { cmd: ocrExe, args: [] };
   }
 
-  // Fallback
   console.warn('Bundled OCR server not found, falling back to system Python');
   const serverPath = path.join(__dirname, '..', 'server', 'ocr_server.py');
   return { cmd: 'python', args: [serverPath] };
@@ -97,18 +85,9 @@ function startPythonServer() {
     cwd: isDev ? path.join(__dirname, '..') : process.resourcesPath,
   });
 
-  pythonProcess.stdout.on('data', (data) => {
-    console.log(`[Python] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.stderr.on('data', (data) => {
-    console.error(`[Python] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.on('error', (err) => {
-    console.error('Failed to start Python process:', err);
-  });
-
+  pythonProcess.stdout.on('data', (data) => console.log(`[Python] ${data.toString().trim()}`));
+  pythonProcess.stderr.on('data', (data) => console.error(`[Python] ${data.toString().trim()}`));
+  pythonProcess.on('error', (err) => console.error('Failed to start Python process:', err));
   pythonProcess.on('exit', (code) => {
     console.log(`Python process exited with code ${code}`);
     pythonProcess = null;
@@ -121,11 +100,8 @@ function waitForServer(timeoutMs = 120000) {
     const check = () => {
       http
         .get(`${OCR_SERVER_URL}/health`, (res) => {
-          if (res.statusCode === 200) {
-            resolve();
-          } else {
-            retry();
-          }
+          if (res.statusCode === 200) resolve();
+          else retry();
         })
         .on('error', () => retry());
     };
@@ -169,11 +145,8 @@ function sendOcrRequest(imageBase64) {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
-          try {
-            resolve(JSON.parse(data));
-          } catch (e) {
-            reject(new Error(`Invalid JSON from OCR server: ${data}`));
-          }
+          try { resolve(JSON.parse(data)); }
+          catch (e) { reject(new Error(`Invalid JSON from OCR server: ${data}`)); }
         });
       }
     );
@@ -195,16 +168,9 @@ async function captureScreenRegion(bounds) {
 
   for (const display of allDisplays) {
     const { x, y, width, height } = display.bounds;
-    const overlapX = Math.max(
-      0,
-      Math.min(bounds.x + bounds.width, x + width) - Math.max(bounds.x, x)
-    );
-    const overlapY = Math.max(
-      0,
-      Math.min(bounds.y + bounds.height, y + height) - Math.max(bounds.y, y)
-    );
+    const overlapX = Math.max(0, Math.min(bounds.x + bounds.width, x + width) - Math.max(bounds.x, x));
+    const overlapY = Math.max(0, Math.min(bounds.y + bounds.height, y + height) - Math.max(bounds.y, y));
     const overlap = overlapX * overlapY;
-
     if (overlap > maxOverlap) {
       maxOverlap = overlap;
       targetDisplay = display;
@@ -230,16 +196,11 @@ async function captureScreenRegion(bounds) {
 
   const thumbnail = source.thumbnail;
   const thumbSize = thumbnail.getSize();
-
-  // Calculate the ratio between thumbnail pixels and actual screen pixels
-  // desktopCapturer scales the screen to fit thumbnailSize, so we need
-  // the ratio of thumbnail dimensions to actual screen dimensions.
   const screenW = targetDisplay.bounds.width;
   const screenH = targetDisplay.bounds.height;
   const ratioX = thumbSize.width / screenW;
   const ratioY = thumbSize.height / screenH;
 
-  // Window bounds relative to this display's origin
   const offsetX = bounds.x - targetDisplay.bounds.x;
   const offsetY = bounds.y - targetDisplay.bounds.y;
 
@@ -251,19 +212,98 @@ async function captureScreenRegion(bounds) {
   const safeW = Math.min(cropWidth, thumbSize.width - cropX);
   const safeH = Math.min(cropHeight, thumbSize.height - cropY);
 
-  const cropped = thumbnail.crop({
-    x: cropX,
-    y: cropY,
-    width: safeW,
-    height: safeH,
-  });
+  const cropped = thumbnail.crop({ x: cropX, y: cropY, width: safeW, height: safeH });
 
   return cropped.toPNG().toString('base64');
+}
+
+// ── Scan Window Management ───────────────────────────────────────
+
+function createScanWindow() {
+  if (scanWindow && !scanWindow.isDestroyed()) {
+    scanWindow.focus();
+    return;
+  }
+
+  const config = loadConfig();
+  const scanBounds = config.scanWindowBounds;
+
+  // Default: right side of main window, or center of screen
+  let defaultX, defaultY;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const mainBounds = mainWindow.getBounds();
+    defaultX = mainBounds.x + mainBounds.width + 20;
+    defaultY = mainBounds.y;
+  } else {
+    const display = screen.getPrimaryDisplay();
+    defaultX = Math.round((display.workAreaSize.width - 260) / 2);
+    defaultY = Math.round((display.workAreaSize.height - 160) / 2);
+  }
+
+  scanWindow = new BrowserWindow({
+    width: (scanBounds && scanBounds.width) || 260,
+    height: (scanBounds && scanBounds.height) || 160,
+    x: (scanBounds && scanBounds.x) || defaultX,
+    y: (scanBounds && scanBounds.y) || defaultY,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  scanWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // Save scan window position on move/resize
+  let saveTimeout = null;
+  const scheduleSave = () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (scanWindow && !scanWindow.isDestroyed()) {
+        saveConfig({ scanWindowBounds: scanWindow.getBounds() });
+      }
+    }, 500);
+  };
+
+  scanWindow.on('move', scheduleSave);
+  scanWindow.on('resize', scheduleSave);
+
+  scanWindow.on('closed', () => {
+    scanWindow = null;
+    // Notify main window
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('scan-window-closed');
+    }
+  });
+}
+
+function closeScanWindow() {
+  if (scanWindow && !scanWindow.isDestroyed()) {
+    scanWindow.close();
+  }
 }
 
 // ── IPC Handlers ─────────────────────────────────────────────────
 
 function setupIPC() {
+  // ── Scan Window Control ────────────────────────────────────
+  ipcMain.handle('open-scan-window', () => {
+    createScanWindow();
+    return { ok: true };
+  });
+
+  ipcMain.handle('close-scan-window', () => {
+    closeScanWindow();
+    return { ok: true };
+  });
+
+  // ── Capture (called by scan window) ────────────────────────
   ipcMain.handle('capture-and-ocr', async () => {
     if (isCapturing) {
       return { text: '', error: 'Already capturing', time_ms: 0 };
@@ -273,43 +313,55 @@ function setupIPC() {
     const startTime = Date.now();
 
     try {
-      const bounds = mainWindow.getBounds();
+      if (!scanWindow || scanWindow.isDestroyed()) {
+        throw new Error('Scan window not open');
+      }
+
+      const bounds = scanWindow.getBounds();
       const imageBase64 = await captureScreenRegion(bounds);
       const result = await sendOcrRequest(imageBase64);
 
-      return {
+      const ocrResult = {
         text: result.text || '',
-        image: imageBase64,
         time_ms: Date.now() - startTime,
         ocr_time_ms: result.time_ms || 0,
       };
+
+      // Relay result to main window
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('ocr-result', ocrResult);
+      }
+
+      return ocrResult;
     } catch (err) {
-      return {
+      const errorResult = {
         text: '',
         error: err.message,
         time_ms: Date.now() - startTime,
       };
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('ocr-result', errorResult);
+      }
+
+      return errorResult;
     } finally {
       isCapturing = false;
     }
   });
 
-  ipcMain.handle('get-bounds', () => {
-    return mainWindow ? mainWindow.getBounds() : null;
-  });
-
-  ipcMain.handle('resize-window', (event, width, height) => {
-    if (mainWindow) {
-      mainWindow.setSize(width, height);
-      return mainWindow.getBounds();
-    }
-    return null;
+  // ── Window Controls ────────────────────────────────────────
+  ipcMain.handle('get-bounds', (event) => {
+    // Return bounds of whichever window sent this
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return win ? win.getBounds() : null;
   });
 
   ipcMain.handle('move-window', (event, x, y) => {
-    if (mainWindow) {
-      mainWindow.setPosition(x, y);
-      return mainWindow.getBounds();
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+      win.setPosition(x, y);
+      return win.getBounds();
     }
     return null;
   });
@@ -329,24 +381,65 @@ function setupIPC() {
       return { running: false };
     }
   });
+}
 
-  ipcMain.handle('save-config', (event, data) => {
-    saveConfig(data);
-    return { ok: true };
+// ── Main Window ──────────────────────────────────────────────────
+
+function createMainWindow() {
+  const config = loadConfig();
+  const bounds = config.mainWindowBounds;
+
+  const display = screen.getPrimaryDisplay();
+  const { width: screenW, height: screenH } = display.workAreaSize;
+  const defaultW = 380;
+  const defaultH = 420;
+  const defaultX = Math.round((screenW - defaultW) / 2);
+  const defaultY = Math.round((screenH - defaultH) / 2);
+
+  mainWindow = new BrowserWindow({
+    width: (bounds && bounds.width) || defaultW,
+    height: (bounds && bounds.height) || defaultH,
+    x: (bounds && bounds.x) || defaultX,
+    y: (bounds && bounds.y) || defaultY,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#1a1a2e',
+    alwaysOnTop: false,
+    resizable: true,
+    hasShadow: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
 
-  ipcMain.handle('load-config', () => {
-    return loadConfig();
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'main.html'));
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow.show();
   });
 
-  ipcMain.handle('get-displays', () => {
-    return screen.getAllDisplays().map((d) => ({
-      id: d.id,
-      label: d.label,
-      bounds: d.bounds,
-      scaleFactor: d.scaleFactor,
-      isPrimary: d.id === screen.getPrimaryDisplay().id,
-    }));
+  // Save window position on move/resize
+  let saveTimeout = null;
+  const scheduleSave = () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        saveConfig({ mainWindowBounds: mainWindow.getBounds() });
+      }
+    }, 500);
+  };
+
+  mainWindow.on('move', scheduleSave);
+  mainWindow.on('resize', scheduleSave);
+
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
   });
 }
 
@@ -357,10 +450,8 @@ function createTray() {
   if (isDev) {
     iconPath = path.join(__dirname, '..', 'icons', 'icon16.png');
   } else {
-    // In production, icon16.png is in extraResources
     iconPath = path.join(process.resourcesPath, 'icon16.png');
     if (!fs.existsSync(iconPath)) {
-      // Fallback: check original dev path (works if running unpacked)
       iconPath = path.join(__dirname, '..', 'icons', 'icon16.png');
     }
   }
@@ -380,13 +471,12 @@ function createTray() {
     },
     { type: 'separator' },
     {
-      label: 'Scan Now',
-      accelerator: 'CommandOrControl+Shift+O',
+      label: 'Open Scanner',
       click: () => {
         if (mainWindow) {
           mainWindow.show();
           mainWindow.focus();
-          mainWindow.webContents.send('trigger-capture');
+          mainWindow.webContents.send('open-scan-trigger');
         }
       },
     },
@@ -411,68 +501,10 @@ function createTray() {
   });
 }
 
-// ── Window Creation ──────────────────────────────────────────────
-
-function createWindow() {
-  const config = loadConfig();
-  const bounds = config.windowBounds;
-
-  const display = screen.getPrimaryDisplay();
-  const { width: screenW, height: screenH } = display.workAreaSize;
-  const defaultX = Math.round((screenW - 260) / 2);
-  const defaultY = Math.round((screenH - 160) / 2);
-
-  mainWindow = new BrowserWindow({
-    width: (bounds && bounds.width) || 260,
-    height: (bounds && bounds.height) || 160,
-    x: (bounds && bounds.x) || defaultX,
-    y: (bounds && bounds.y) || defaultY,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: false,
-    resizable: true,
-    hasShadow: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show();
-  });
-
-  let saveTimeout = null;
-  const scheduleSave = () => {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        saveConfig({ windowBounds: mainWindow.getBounds() });
-      }
-    }, 500);
-  };
-
-  mainWindow.on('move', scheduleSave);
-  mainWindow.on('resize', scheduleSave);
-
-  mainWindow.on('close', (e) => {
-    if (!app.isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-      return false;
-    }
-  });
-}
-
 // ── App Lifecycle ────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
   setupIPC();
-
   startPythonServer();
   createTray();
 
@@ -483,15 +515,15 @@ app.whenReady().then(async () => {
     console.error(err.message);
   }
 
-  createWindow();
+  createMainWindow();
 
   globalShortcut.register('CommandOrControl+Shift+O', () => {
-    if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.webContents.send('trigger-capture');
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
+    // Toggle scan window
+    if (scanWindow && !scanWindow.isDestroyed()) {
+      closeScanWindow();
+    } else {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('open-scan-trigger');
       }
     }
   });
