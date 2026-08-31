@@ -10,7 +10,10 @@
 <body>
   <div id="app">
     <div id="header">
-      <div id="logo">Rikai</div>
+      <div id="logo">
+        <img id="logo-img" src="logo.png" alt="">
+        <span id="logo-text">Rikai</span>
+      </div>
       <div id="status-badge">
         <span id="status-dot" class="dot dot-red"></span>
         <span id="status-label">Loading...</span>
@@ -19,16 +22,27 @@
 
     <div id="result-area">
       <div id="result-placeholder">
-        <div id="placeholder-icon">🔍</div>
+        <div id="placeholder-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
         <div id="placeholder-text">Position the scan window over manga text,<br>then click to capture</div>
       </div>
       <div id="result-text" class="hidden"></div>
+      <div id="result-translation" class="hidden"></div>
       <div id="result-meta" class="hidden"></div>
     </div>
 
     <div id="controls">
       <button id="btn-scan" class="btn btn-primary" disabled>
-        <span id="btn-scan-icon">◎</span>
+        <span id="btn-scan-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </span>
         <span id="btn-scan-label">Scan</span>
       </button>
       <button id="btn-copy" class="btn btn-secondary" disabled>

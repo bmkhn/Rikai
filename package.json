@@ -32,18 +32,26 @@
       {
         "from": "build/dist/ocr_server",
         "to": "ocr_server",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "icons/icon16.png",
         "to": "icon16.png"
+      },
+      {
+        "from": "icons/icon256.png",
+        "to": "icon256.png"
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icons/icon.ico"

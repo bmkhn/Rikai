@@ -1,59 +1,14 @@
 /**
  * Rikai Scan Window — clean capture frame.
- * Hold anywhere to drag, click to scan.
+ * Drag the frame to reposition, click the button to scan.
  */
 
 const scanFrame = document.getElementById('scan-frame');
+const captureBtn = document.getElementById('capture-btn');
+const captureBtnIcon = document.getElementById('capture-btn-icon');
 
-// ── Drag State ───────────────────────────────────────────────────
-
-let dragState = null;
-const DRAG_THRESHOLD = 5; // px before we commit to a drag
-
-// ── Window Dragging ──────────────────────────────────────────────
-// Hold anywhere on the frame to drag. Quick click = scan.
-
-scanFrame.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return; // left click only
-  e.preventDefault();
-
-  dragState = {
-    startX: e.screenX,
-    startY: e.screenY,
-    moved: false,
-  };
-});
-
-document.addEventListener('mousemove', (e) => {
-  if (!dragState) return;
-
-  const dx = e.screenX - dragState.startX;
-  const dy = e.screenY - dragState.startY;
-
-  if (!dragState.moved) {
-    if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
-      dragState.moved = true;
-      document.body.style.cursor = 'grabbing';
-    }
-  }
-
-  if (dragState.moved) {
-    window.rikai.moveWindow(e.screenX - e.clientX, e.screenY - e.clientY);
-  }
-});
-
-document.addEventListener('mouseup', (e) => {
-  if (!dragState) return;
-
-  const wasDragging = dragState.moved;
-  dragState = null;
-  document.body.style.cursor = '';
-
-  // If we didn't drag, it was a click → scan
-  if (!wasDragging) {
-    capture();
-  }
-});
+const ICON_SCAN = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_LOADER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
 
 // ── Capture ──────────────────────────────────────────────────────
 
@@ -63,18 +18,24 @@ async function capture() {
   if (isCapturing) return;
   isCapturing = true;
 
-  scanFrame.classList.add('capturing');
+  captureBtn.classList.add('capturing');
+  captureBtnIcon.innerHTML = ICON_LOADER;
 
   try {
     await window.rikai.captureAndOcr();
-    // Result is relayed to main window via main process IPC
   } catch (err) {
     console.error('Capture error:', err);
   } finally {
     isCapturing = false;
-    scanFrame.classList.remove('capturing');
+    captureBtn.classList.remove('capturing');
+    captureBtnIcon.innerHTML = ICON_SCAN;
   }
 }
+
+captureBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  capture();
+});
 
 // Global shortcut trigger from main process
 window.rikai.onTriggerCapture(() => {

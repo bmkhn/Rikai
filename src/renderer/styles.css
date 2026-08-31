@@ -10,7 +10,6 @@ html, body {
   height: 100%;
   overflow: hidden;
   user-select: none;
-  -webkit-app-region: no-drag;
   background: transparent;
 }
 
@@ -19,18 +18,63 @@ html, body {
 #scan-frame {
   width: 100%;
   height: 100%;
-  border: 1.5px solid rgba(80, 200, 255, 0.5);
+  border: 1.5px solid rgba(0, 96, 192, 0.4);
   border-radius: 6px;
   position: relative;
-  background: rgba(80, 200, 255, 0.04);
-  cursor: crosshair;
+  background: rgba(0, 96, 192, 0.03);
+  cursor: grab;
+  -webkit-app-region: drag;
   transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
 }
 
 #scan-frame:hover {
-  border-color: rgba(80, 200, 255, 0.8);
-  background: rgba(80, 200, 255, 0.08);
-  box-shadow: 0 0 20px rgba(80, 200, 255, 0.15), inset 0 0 15px rgba(80, 200, 255, 0.05);
+  border-color: rgba(0, 96, 192, 0.7);
+  background: rgba(0, 96, 192, 0.06);
+  box-shadow: 0 0 20px rgba(0, 96, 192, 0.15), inset 0 0 15px rgba(0, 96, 192, 0.05);
+}
+
+#scan-frame:active {
+  cursor: grabbing;
+}
+
+/* ── Capture Button ───────────────────────────────────────────── */
+
+#capture-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 96, 192, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.15s, transform 0.1s;
+  z-index: 10;
+}
+
+#capture-btn:hover {
+  background: rgba(0, 96, 192, 1);
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+#capture-btn:active {
+  transform: translate(-50%, -50%) scale(0.95);
+}
+
+#capture-btn.capturing {
+  background: rgba(214, 158, 46, 0.9);
+  pointer-events: none;
+}
+
+#capture-btn-icon {
+  font-size: 18px;
+  color: white;
+  pointer-events: none;
 }
 
 /* ── Corner Accents ───────────────────────────────────────────── */
@@ -39,7 +83,7 @@ html, body {
   position: absolute;
   width: 14px;
   height: 14px;
-  border-color: rgba(80, 200, 255, 0.85);
+  border-color: rgba(0, 96, 192, 0.85);
   border-style: solid;
   border-width: 0;
   pointer-events: none;
@@ -55,7 +99,7 @@ html, body {
 #scan-frame:hover .corner-tr,
 #scan-frame:hover .corner-bl,
 #scan-frame:hover .corner-br {
-  border-color: rgba(80, 200, 255, 1);
+  border-color: rgba(0, 96, 192, 1);
 }
 
 
@@ -63,9 +107,9 @@ html, body {
 /* ── Capture Pulse ─────────────────────────────────────────────── */
 
 @keyframes capture-pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(80, 200, 255, 0.6); }
-  70%  { box-shadow: 0 0 0 10px rgba(80, 200, 255, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(80, 200, 255, 0); }
+  0%   { box-shadow: 0 0 0 0 rgba(0, 96, 192, 0.6); }
+  70%  { box-shadow: 0 0 0 10px rgba(0, 96, 192, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 96, 192, 0); }
 }
 
 #scan-frame.capturing {
@@ -79,7 +123,7 @@ html, body {
   position: absolute;
   inset: 0;
   border-radius: 6px;
-  background: rgba(80, 200, 255, 0.15);
+  background: rgba(0, 96, 192, 0.15);
   pointer-events: none;
   transition: opacity 0.3s;
 }

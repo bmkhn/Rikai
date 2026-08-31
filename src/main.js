@@ -157,6 +157,38 @@ function sendOcrRequest(imageBase64) {
   });
 }
 
+function sendTranslateRequest(text, target = 'en') {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ text, target });
+    const url = new URL('/translate', OCR_SERVER_URL);
+
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)); }
+          catch (e) { reject(new Error(`Invalid JSON from translate server: ${data}`)); }
+        });
+      }
+    );
+
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // ── Screen Capture ───────────────────────────────────────────────
 
 async function captureScreenRegion(bounds) {
@@ -228,21 +260,17 @@ function createScanWindow() {
   const config = loadConfig();
   const scanBounds = config.scanWindowBounds;
 
-  // Default: right side of main window, or center of screen
-  let defaultX, defaultY;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const mainBounds = mainWindow.getBounds();
-    defaultX = mainBounds.x + mainBounds.width + 20;
-    defaultY = mainBounds.y;
-  } else {
-    const display = screen.getPrimaryDisplay();
-    defaultX = Math.round((display.workAreaSize.width - 260) / 2);
-    defaultY = Math.round((display.workAreaSize.height - 160) / 2);
-  }
+  // Default: center of primary display
+  const display = screen.getPrimaryDisplay();
+  const { width: screenW, height: screenH } = display.workAreaSize;
+  const scanW = 260;
+  const scanH = 160;
+  const defaultX = Math.round((screenW - scanW) / 2);
+  const defaultY = Math.round((screenH - scanH) / 2);
 
   scanWindow = new BrowserWindow({
-    width: (scanBounds && scanBounds.width) || 260,
-    height: (scanBounds && scanBounds.height) || 160,
+    width: (scanBounds && scanBounds.width) || scanW,
+    height: (scanBounds && scanBounds.height) || scanH,
     x: (scanBounds && scanBounds.x) || defaultX,
     y: (scanBounds && scanBounds.y) || defaultY,
     frame: false,
@@ -251,6 +279,7 @@ function createScanWindow() {
     skipTaskbar: true,
     resizable: true,
     hasShadow: false,
+    icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -318,13 +347,31 @@ function setupIPC() {
       }
 
       const bounds = scanWindow.getBounds();
-      const imageBase64 = await captureScreenRegion(bounds);
+      let imageBase64 = await captureScreenRegion(bounds);
       const result = await sendOcrRequest(imageBase64);
 
+      const ocrText = result.text || '';
+      const ocrTimeMs = result.time_ms || 0;
+
+      // Auto-translate the recognized text
+      let translation = '';
+      let translateTimeMs = 0;
+      if (ocrText.trim()) {
+        try {
+          const translateResult = await sendTranslateRequest(ocrText);
+          translation = translateResult.translation || '';
+          translateTimeMs = translateResult.time_ms || 0;
+        } catch (err) {
+          console.error('Translation failed:', err.message);
+        }
+      }
+
       const ocrResult = {
-        text: result.text || '',
+        text: ocrText,
+        translation: translation,
         time_ms: Date.now() - startTime,
-        ocr_time_ms: result.time_ms || 0,
+        ocr_time_ms: ocrTimeMs,
+        translate_time_ms: translateTimeMs,
       };
 
       // Relay result to main window
@@ -385,6 +432,13 @@ function setupIPC() {
 
 // ── Main Window ──────────────────────────────────────────────────
 
+function getIconPath() {
+  if (isDev) {
+    return path.join(__dirname, '..', 'icons', 'icon256.png');
+  }
+  return path.join(process.resourcesPath, 'icon256.png');
+}
+
 function createMainWindow() {
   const config = loadConfig();
   const bounds = config.mainWindowBounds;
@@ -403,10 +457,11 @@ function createMainWindow() {
     y: (bounds && bounds.y) || defaultY,
     frame: false,
     transparent: false,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#f0f4f8',
     alwaysOnTop: false,
     resizable: true,
     hasShadow: true,
+    icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -490,7 +545,7 @@ function createTray() {
     },
   ]);
 
-  tray.setToolTip('Rikai — Manga OCR');
+  tray.setToolTip('Rikai — Manga OCR + Translation');
   tray.setContextMenu(contextMenu);
 
   tray.on('double-click', () => {

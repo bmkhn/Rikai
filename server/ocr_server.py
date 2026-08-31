@@ -8,6 +8,7 @@ Usage:
 
 Endpoints:
     POST /ocr          Accept image bytes (any format), return JSON {"text": "..."}
+    POST /translate    Accept JSON {"text": "...", "target": "en"}, return {"translation": "..."}
     GET  /health       Return {"status": "ok", "model": "manga-ocr-base"}
 """
 
@@ -44,35 +45,67 @@ def recognize(image_bytes: bytes) -> str:
     return mocr(img)
 
 
+def translate_text(text: str, target: str = "en") -> str:
+    """Translate text to target language using Google Translate (free, no API key)."""
+    from deep_translator import GoogleTranslator
+    if not text or not text.strip():
+        return ""
+    return GoogleTranslator(source="auto", target=target).translate(text)
+
+
 # ── HTTP Handler ─────────────────────────────────────────────────────
 
 class OcrHandler(BaseHTTPRequestHandler):
-    """Handles POST /ocr and GET /health."""
+    """Handles POST /ocr, POST /translate, and GET /health."""
 
     def do_GET(self):
         if self.path == "/health":
             self._json_response(200, {"status": "ok", "model": "manga-ocr-base"})
         else:
-            self._json_response(404, {"error": "Not found. Use POST /ocr"})
+            self._json_response(404, {"error": "Not found. Use POST /ocr or POST /translate"})
 
     def do_POST(self):
-        if self.path != "/ocr":
-            self._json_response(404, {"error": "Not found. Use POST /ocr"})
-            return
-
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length == 0:
-            self._json_response(400, {"error": "No image data in request body"})
+            self._json_response(400, {"error": "Empty request body"})
             return
 
-        image_bytes = self.rfile.read(content_length)
+        raw_body = self.rfile.read(content_length)
 
+        if self.path == "/ocr":
+            self._handle_ocr(raw_body)
+        elif self.path == "/translate":
+            self._handle_translate(raw_body)
+        else:
+            self._json_response(404, {"error": "Not found. Use POST /ocr or POST /translate"})
+
+    def _handle_ocr(self, raw_body: bytes):
         try:
             t0 = time.time()
-            text = recognize(image_bytes)
+            text = recognize(raw_body)
             elapsed_ms = (time.time() - t0) * 1000
             self._json_response(200, {
                 "text": text,
+                "time_ms": round(elapsed_ms, 1),
+            })
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_translate(self, raw_body: bytes):
+        try:
+            data = json.loads(raw_body.decode("utf-8"))
+            text = data.get("text", "")
+            target = data.get("target", "en")
+
+            if not text.strip():
+                self._json_response(200, {"translation": ""})
+                return
+
+            t0 = time.time()
+            translation = translate_text(text, target)
+            elapsed_ms = (time.time() - t0) * 1000
+            self._json_response(200, {
+                "translation": translation,
                 "time_ms": round(elapsed_ms, 1),
             })
         except Exception as e:

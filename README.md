@@ -10,7 +10,8 @@ Rikai is a desktop app that acts as a **screen OCR magnifier for Japanese text**
 2. Drag the scan frame over any manga text (browser, image viewer, desktop app — anything)
 3. Click the scan frame — it captures the screen region behind it
 4. Runs [MangaOCR](https://github.com/kha-white/manga-ocr) (kha-white/manga-ocr-base) on the captured image
-5. Displays the recognized Japanese text in the main window
+5. Auto-translates the Japanese text to English using Google Translate (free, no API key)
+6. Displays both the original Japanese text and English translation in the main window
 
 **No Chrome extension. No text detection pipeline. No ONNX conversion.** Just the original PyTorch model for maximum accuracy.
 
@@ -80,6 +81,7 @@ python test/test-manga-ocr.py test.webp
 |---|---|
 | Desktop Framework | [Electron](https://www.electronjs.org/) |
 | OCR Model | [kha-white/manga-ocr-base](https://github.com/kha-white/manga-ocr) (PyTorch) |
+| Translation | [deep-translator](https://github.com/nidhaloff/deep-translator) (Google Translate, free) |
 | Python Bundling | [PyInstaller](https://pyinstaller.org/) |
 | Installer | [Electron Builder](https://www.electron.build/) (NSIS) |
 | Screen Capture | Electron `desktopCapturer` |
