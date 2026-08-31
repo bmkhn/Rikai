@@ -1,79 +1,43 @@
 # Rikai
 
-Japanese manga OCR desktop app. Position a scan window over text on screen, get instant recognition.
+Japanese manga OCR desktop app with instant translation. Capture text from anywhere on screen, get recognition and English translation in one click.
 
-## What is Rikai?
+Developed a desktop application for real-time Japanese manga text recognition and translation. The app uses a two-window architecture built with Electron: a main window displaying OCR results and translation, and a transparent, always-on-top scan frame for precise screen region capture. Users position the scan frame over manga text anywhere on screen — browser, image viewer, or desktop app — click to capture, and receive both the original Japanese text and an English translation instantly.
 
-Rikai is a desktop app that acts as a **screen OCR magnifier for Japanese text**:
-
-1. Click **Scan** in the main window to open a small, transparent scan frame
-2. Drag the scan frame over any manga text (browser, image viewer, desktop app — anything)
-3. Click the scan frame — it captures the screen region behind it
-4. Runs [MangaOCR](https://github.com/kha-white/manga-ocr) (kha-white/manga-ocr-base) on the captured image
-5. Auto-translates the Japanese text to English using Google Translate (free, no API key)
-6. Displays both the original Japanese text and English translation in the main window
-
-**No Chrome extension. No text detection pipeline. No ONNX conversion.** Just the original PyTorch model for maximum accuracy.
+Recognition is powered by [manga-ocr](https://github.com/kha-white/manga-ocr) by kha-white — a pre-trained PyTorch model for Japanese manga text, served through a local Python HTTP server that runs as a subprocess. Translation is handled via Google Translate through [deep-translator](https://github.com/nidhaloff/deep-translator), requiring no API key. The system is designed around maximum accuracy by using the original PyTorch model directly rather than quantized or converted alternatives.
 
 ## How It Works
 
 The app uses a **two-window architecture**:
 
-- **Main Window** — a standard dark-themed Electron window that shows OCR results, a Scan button, Copy button, and capture history.
-- **Scan Window** — a small, frameless, transparent, always-on-top window. Hold to drag, click to capture. It stays clean with no text or buttons, so you can position it precisely over a single speech bubble.
+- **Main Window** — a light-themed Electron window that shows OCR results, translation, a Scan button, Copy button, and capture history.
+- **Scan Window** — a small, frameless, transparent, always-on-top window. Drag to reposition, click the capture button to scan. Stays clean so you can position it precisely over a single speech bubble.
 
 The Python OCR server runs as a subprocess, auto-started by Electron on launch. Communication happens over localhost HTTP.
 
-## Quick Start
+## Setup
 
 ### Prerequisites
+
 - [Node.js](https://nodejs.org/) (v18+)
 - [Python 3](https://python.org/) (3.10+)
 
-### Setup
+### Install
 
 ```bash
-# Install npm dependencies
 npm install
-
-# Create Python virtual environment and install dependencies
 python -m venv venv
 ./venv/Scripts/pip install -r server/requirements.txt   # Windows
 # source venv/bin/pip install -r server/requirements.txt   # macOS/Linux
+```
 
-# Run the app (starts Python server automatically)
+### Run
+
+```bash
 npm start
 ```
 
 First launch downloads the manga-ocr model from HuggingFace (~400MB) and takes about 80 seconds to load on CPU. After that, the status badge turns green and you can scan.
-
-### Building
-
-```bash
-# Bundle Python OCR server into standalone exe (requires PyInstaller)
-./venv/Scripts/pip install pyinstaller
-build/build-python.bat
-
-# Package Electron app (Windows NSIS installer)
-npm run build
-
-# Or do both at once
-npm run build:all
-```
-
-### Testing OCR standalone
-
-```bash
-# Activate venv first
-./venv/Scripts/activate
-
-# Test via server
-python server/ocr_server.py
-python test/test-manga-ocr.py --server test.webp
-
-# Or test directly
-python test/test-manga-ocr.py test.webp
-```
 
 ## Tech Stack
 
@@ -82,10 +46,10 @@ python test/test-manga-ocr.py test.webp
 | Desktop Framework | [Electron](https://www.electronjs.org/) |
 | OCR Model | [kha-white/manga-ocr-base](https://github.com/kha-white/manga-ocr) (PyTorch) |
 | Translation | [deep-translator](https://github.com/nidhaloff/deep-translator) (Google Translate, free) |
-| Python Bundling | [PyInstaller](https://pyinstaller.org/) |
-| Installer | [Electron Builder](https://www.electron.build/) (NSIS) |
 | Screen Capture | Electron `desktopCapturer` |
 | Language | JavaScript (Electron), Python (OCR) |
+
+**Skills:** Electron, JavaScript, Python, PyTorch, Screen Capture, REST APIs, HTTP Server, Desktop Application Development, Translation API, Image Processing, User Interface Design
 
 ## Project Structure
 
@@ -96,22 +60,24 @@ Rikai/
     preload.js           # IPC bridge (contextIsolation)
     renderer/
       main.html         # Main window UI
-      main.css          # Main window styling
-      main.js           # Main window logic (results, history, controls)
-      index.html        # Scan window UI (clean frame)
-      styles.css        # Scan window styling
-      renderer.js       # Scan window logic (drag, capture)
+      main.css          # Main window styling (light theme, icon-inspired)
+      main.js           # Main window logic (results, translation, history)
+      index.html        # Scan window UI (capture button, drag frame)
+      styles.css        # Scan window styling (blue accent, -webkit-app-region)
+      renderer.js       # Scan window logic (capture, drag)
+      logo.png          # App logo for header
   server/
-    ocr_server.py        # Python OCR HTTP server
+    ocr_server.py        # Python OCR + translation HTTP server
     requirements.txt     # Python dependencies
   test/
     test-manga-ocr.py    # OCR test script
   build/
-    build-python.bat     # PyInstaller build script
-  icons/                 # App icons
+    build-python.bat     # PyInstaller build script (optional)
+  icons/                 # App icons (all sizes + .ico)
   venv/                  # Python virtual environment (gitignored)
 ```
 
-## History
+## Credits
 
-Rikai started as a Chrome extension using ONNX models in-browser, but accuracy concerns with quantized models led to a pivot to an Electron desktop app using the original PyTorch manga-ocr model. The Python OCR server approach gives maximum accuracy at the cost of a larger install size (~240MB).
+- **OCR Model**: [manga-ocr](https://github.com/kha-white/manga-ocr) by [kha-white](https://github.com/kha-white) — this project provides the desktop UI and translation layer, not the OCR model itself.
+- **Translation**: [deep-translator](https://github.com/nidhaloff/deep-translator) wrapping Google Translate (free tier, no API key required).

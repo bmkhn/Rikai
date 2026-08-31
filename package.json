@@ -5,72 +5,11 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux",
-    "build:python": "build\\build-python.bat",
-    "build:all": "npm run build:python && npm run build"
+    "dev": "electron . --dev"
   },
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^35.0.0",
-    "electron-builder": "^26.0.0"
-  },
-  "build": {
-    "appId": "com.rikai.desktop",
-    "productName": "Rikai",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "icons/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "build/dist/ocr_server",
-        "to": "ocr_server",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "icons/icon16.png",
-        "to": "icon16.png"
-      },
-      {
-        "from": "icons/icon256.png",
-        "to": "icon256.png"
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "icons/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "icons/icon.ico",
-      "uninstallerIcon": "icons/icon.ico"
-    },
-    "mac": {
-      "target": "dmg",
-      "icon": "icons/icon256.png",
-      "category": "public.app-category.utilities"
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "icons/icon256.png",
-      "category": "Utility"
-    }
+    "electron": "^35.0.0"
   }
 }
