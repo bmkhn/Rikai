@@ -1,18 +1,38 @@
 /**
  * Rikai Scan Window — clean capture frame.
  * Drag the frame to reposition, click the button to scan.
+ * Shows a sweeping scan line during OCR for visual feedback.
  */
 
 const scanFrame = document.getElementById('scan-frame');
 const captureBtn = document.getElementById('capture-btn');
 const captureBtnIcon = document.getElementById('capture-btn-icon');
+const scanLine = document.getElementById('scan-line');
 
 const ICON_SCAN = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>';
 const ICON_LOADER = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
 
-// ── Capture ──────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────
 
 let isCapturing = false;
+
+// ── Animations ───────────────────────────────────────────────────
+
+function startScanAnimation() {
+  scanLine.classList.remove('hidden');
+  scanLine.classList.add('active');
+  captureBtn.classList.add('dimmed');
+  scanFrame.classList.add('capturing');
+}
+
+function stopScanAnimation() {
+  scanLine.classList.remove('active');
+  scanLine.classList.add('hidden');
+  captureBtn.classList.remove('dimmed');
+  scanFrame.classList.remove('capturing');
+}
+
+// ── Capture ──────────────────────────────────────────────────────
 
 async function capture() {
   if (isCapturing) return;
@@ -20,15 +40,18 @@ async function capture() {
 
   captureBtn.classList.add('capturing');
   captureBtnIcon.innerHTML = ICON_LOADER;
+  startScanAnimation();
 
   try {
-    await window.rikai.captureAndOcr();
+    const result = await window.rikai.captureAndOcr();
+    return result;
   } catch (err) {
     console.error('Capture error:', err);
   } finally {
     isCapturing = false;
     captureBtn.classList.remove('capturing');
     captureBtnIcon.innerHTML = ICON_SCAN;
+    stopScanAnimation();
   }
 }
 

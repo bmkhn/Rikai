@@ -143,7 +143,8 @@ btnClearHistory.addEventListener('click', () => {
 
 // Listen for OCR results from scan window (relayed via main process)
 window.rikai.onOcrResult((result) => {
-  if (result.error) {
+  if (result.error && !result.text) {
+    // Pure error with no text — show error in the result area
     setStatus('Scan error', 'dot-red');
     showPlaceholder();
     resultText.textContent = result.error;
@@ -153,7 +154,10 @@ window.rikai.onOcrResult((result) => {
       if (!scanWindowActive) setStatus('Ready', 'dot-green');
     }, 3000);
   } else if (result.text) {
-    const meta = `${result.ocr_time_ms || '?'}ms OCR` + (result.translate_time_ms ? ` + ${result.translate_time_ms}ms translate` : '');
+    // Always show the recognized text, even if translation failed
+    const meta = `${result.ocr_time_ms || '?'}ms OCR`
+      + (result.translate_time_ms ? ` + ${result.translate_time_ms}ms translate` : '')
+      + (result.translate_error ? ' (translate unavailable)' : '');
     showResult(result.text, result.translation || '', meta);
     setStatus('Text found', 'dot-green');
   } else {

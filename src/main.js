@@ -145,8 +145,17 @@ function sendOcrRequest(imageBase64) {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error(`Invalid JSON from OCR server: ${data}`)); }
+          try {
+            const parsed = JSON.parse(data);
+            // Reject on HTTP errors so the caller sees the error message
+            if (res.statusCode >= 400) {
+              reject(new Error(parsed.error || `OCR server error (${res.statusCode})`));
+            } else {
+              resolve(parsed);
+            }
+          } catch (e) {
+            reject(new Error(`Invalid JSON from OCR server: ${data}`));
+          }
         });
       }
     );
@@ -177,8 +186,16 @@ function sendTranslateRequest(text, target = 'en') {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error(`Invalid JSON from translate server: ${data}`)); }
+          try {
+            const parsed = JSON.parse(data);
+            if (res.statusCode >= 400) {
+              reject(new Error(parsed.error || `Translate server error (${res.statusCode})`));
+            } else {
+              resolve(parsed);
+            }
+          } catch (e) {
+            reject(new Error(`Invalid JSON from translate server: ${data}`));
+          }
         });
       }
     );
@@ -279,6 +296,8 @@ function createScanWindow() {
     skipTaskbar: true,
     resizable: true,
     hasShadow: false,
+    title: '',
+    type: 'toolbar',
     icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -332,7 +351,7 @@ function setupIPC() {
     return { ok: true };
   });
 
-  // ── Capture (called by scan window) ────────────────────────
+  // ── Capture + OCR + Translate (single-stage) ─────────────────
   ipcMain.handle('capture-and-ocr', async () => {
     if (isCapturing) {
       return { text: '', error: 'Already capturing', time_ms: 0 };
@@ -348,38 +367,44 @@ function setupIPC() {
 
       const bounds = scanWindow.getBounds();
       let imageBase64 = await captureScreenRegion(bounds);
-      const result = await sendOcrRequest(imageBase64);
+      const ocrResult = await sendOcrRequest(imageBase64);
 
-      const ocrText = result.text || '';
-      const ocrTimeMs = result.time_ms || 0;
+      const ocrText = ocrResult.text || '';
+      const ocrTimeMs = ocrResult.time_ms || 0;
 
       // Auto-translate the recognized text
       let translation = '';
       let translateTimeMs = 0;
+      let translateError = '';
       if (ocrText.trim()) {
         try {
           const translateResult = await sendTranslateRequest(ocrText);
-          translation = translateResult.translation || '';
-          translateTimeMs = translateResult.time_ms || 0;
+          if (translateResult.error) {
+            translateError = translateResult.error;
+          } else {
+            translation = translateResult.translation || '';
+            translateTimeMs = translateResult.time_ms || 0;
+          }
         } catch (err) {
-          console.error('Translation failed:', err.message);
+          translateError = err.message;
         }
       }
 
-      const ocrResult = {
+      const result = {
         text: ocrText,
         translation: translation,
         time_ms: Date.now() - startTime,
         ocr_time_ms: ocrTimeMs,
         translate_time_ms: translateTimeMs,
+        translate_error: translateError,
       };
 
       // Relay result to main window
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('ocr-result', ocrResult);
+        mainWindow.webContents.send('ocr-result', result);
       }
 
-      return ocrResult;
+      return result;
     } catch (err) {
       const errorResult = {
         text: '',
@@ -456,6 +481,7 @@ function createMainWindow() {
     x: (bounds && bounds.x) || defaultX,
     y: (bounds && bounds.y) || defaultY,
     frame: false,
+    show: false,
     transparent: false,
     backgroundColor: '#f0f4f8',
     alwaysOnTop: false,
@@ -563,14 +589,14 @@ app.whenReady().then(async () => {
   startPythonServer();
   createTray();
 
+  createMainWindow();
+
   try {
     await waitForServer();
     console.log('Python OCR server is ready');
   } catch (err) {
     console.error(err.message);
   }
-
-  createMainWindow();
 
   globalShortcut.register('CommandOrControl+Shift+O', () => {
     // Toggle scan window

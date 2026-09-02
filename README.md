@@ -4,7 +4,7 @@ Japanese manga OCR desktop app with instant translation. Capture text from anywh
 
 Developed a desktop application for real-time Japanese manga text recognition and translation. The app uses a two-window architecture built with Electron: a main window displaying OCR results and translation, and a transparent, always-on-top scan frame for precise screen region capture. Users position the scan frame over manga text anywhere on screen — browser, image viewer, or desktop app — click to capture, and receive both the original Japanese text and an English translation instantly.
 
-Recognition is powered by [manga-ocr](https://github.com/kha-white/manga-ocr) by kha-white — a pre-trained PyTorch model for Japanese manga text, served through a local Python HTTP server that runs as a subprocess. Translation is handled via Google Translate through [deep-translator](https://github.com/nidhaloff/deep-translator), requiring no API key. The system is designed around maximum accuracy by using the original PyTorch model directly rather than quantized or converted alternatives.
+Recognition is powered by [manga-ocr](https://github.com/kha-white/manga-ocr) by kha-white — a pre-trained PyTorch model for Japanese manga text, served through a local Python HTTP server that runs as a subprocess. Translation is handled via direct Google Translate API calls (no API key needed), with a MyMemory fallback for reliability. Images are preprocessed (contrast, sharpening, upscaling) before OCR to improve accuracy on small or low-quality source images.
 
 ## How It Works
 
@@ -45,7 +45,7 @@ First launch downloads the manga-ocr model from HuggingFace (~400MB) and takes a
 |---|---|
 | Desktop Framework | [Electron](https://www.electronjs.org/) |
 | OCR Model | [kha-white/manga-ocr-base](https://github.com/kha-white/manga-ocr) (PyTorch) |
-| Translation | [deep-translator](https://github.com/nidhaloff/deep-translator) (Google Translate, free) |
+| Translation | Google Translate API + MyMemory fallback (no API key) |
 | Screen Capture | Electron `desktopCapturer` |
 | Language | JavaScript (Electron), Python (OCR) |
 
@@ -80,4 +80,4 @@ Rikai/
 ## Credits
 
 - **OCR Model**: [manga-ocr](https://github.com/kha-white/manga-ocr) by [kha-white](https://github.com/kha-white) — this project provides the desktop UI and translation layer, not the OCR model itself.
-- **Translation**: [deep-translator](https://github.com/nidhaloff/deep-translator) wrapping Google Translate (free tier, no API key required).
+- **Translation**: Direct Google Translate API calls with MyMemory fallback — no external translation library required.

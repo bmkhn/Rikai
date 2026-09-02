@@ -53,7 +53,7 @@ html, body {
   justify-content: center;
   cursor: pointer;
   -webkit-app-region: no-drag;
-  transition: background 0.15s, transform 0.1s;
+  transition: background 0.15s, transform 0.1s, opacity 0.3s;
   z-index: 10;
 }
 
@@ -68,6 +68,11 @@ html, body {
 
 #capture-btn.capturing {
   background: rgba(214, 158, 46, 0.9);
+  pointer-events: none;
+}
+
+#capture-btn.dimmed {
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -102,8 +107,6 @@ html, body {
   border-color: rgba(0, 96, 192, 1);
 }
 
-
-
 /* ── Capture Pulse ─────────────────────────────────────────────── */
 
 @keyframes capture-pulse {
@@ -117,19 +120,36 @@ html, body {
   animation: capture-pulse 0.6s ease-out;
 }
 
-/* ── Capture Indicator (brief flash) ──────────────────────────── */
+/* ── Scan Line (visual feedback during OCR) ───────────────────── */
 
-#capture-indicator {
+#scan-line {
   position: absolute;
-  inset: 0;
-  border-radius: 6px;
-  background: rgba(0, 96, 192, 0.15);
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 180, 255, 0.0) 10%,
+    rgba(0, 180, 255, 0.9) 50%,
+    rgba(0, 180, 255, 0.0) 90%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px rgba(0, 180, 255, 0.6), 0 0 20px rgba(0, 180, 255, 0.3);
+  z-index: 15;
   pointer-events: none;
-  transition: opacity 0.3s;
+  top: 0;
 }
 
-#capture-indicator.flash {
-  opacity: 0;
+#scan-line.active {
+  animation: scan-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes scan-sweep {
+  0%   { top: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
 }
 
 /* ── Utilities ────────────────────────────────────────────────── */
